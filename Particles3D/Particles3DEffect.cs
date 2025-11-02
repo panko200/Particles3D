@@ -188,10 +188,10 @@ namespace Particles3D
         [AnimationSlider("F0", "周期", 1, 10)]
         public Animation RandomScaleCount { get; } = new Animation(10, 1, 100);
         [Display(GroupName = "ランダム", Name = "初期拡大率", Description = "初期拡大率")]
-        [AnimationSlider("F1", "px", -100, 100)]
+        [AnimationSlider("F1", "％", -100, 100)]
         public Animation RandomStartScaleRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
         [Display(GroupName = "ランダム", Name = "終端拡大率", Description = "終端拡大率")]
-        [AnimationSlider("F1", "px", -100, 100)]
+        [AnimationSlider("F1", "％", -100, 100)]
         public Animation RandomEndScaleRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "ランダム", Name = "回転ランダム有効化", Description = "回転ランダムを有効化します。")]
@@ -206,10 +206,10 @@ namespace Particles3D
         [AnimationSlider("F0", "周期", 1, 10)]
         public Animation RandomRotCount { get; } = new Animation(10, 1, 100);
         [Display(GroupName = "ランダム", Name = "初期回転", Description = "初期回転")]
-        [AnimationSlider("F1", "px", -360, 360)]
+        [AnimationSlider("F1", "°", -360, 360)]
         public Animation RandomStartRotRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
         [Display(GroupName = "ランダム", Name = "終端回転", Description = "終端回転")]
-        [AnimationSlider("F1", "px", -360, 360)]
+        [AnimationSlider("F1", "°", -360, 360)]
         public Animation RandomEndRotRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "ランダム", Name = "不透明度ランダム有効化", Description = "不透明度ランダムを有効化します。")]
@@ -224,10 +224,10 @@ namespace Particles3D
         [AnimationSlider("F0", "周期", 1, 10)]
         public Animation RandomOpacityCount { get; } = new Animation(10, 1, 100);
         [Display(GroupName = "ランダム", Name = "初期不透明度", Description = "初期不透明度")]
-        [AnimationSlider("F1", "px", 0, 100)]
+        [AnimationSlider("F1", "％", 0, 100)]
         public Animation RandomStartOpacityRange { get; } = new Animation(0, 0, 100);
         [Display(GroupName = "ランダム", Name = "終端不透明度", Description = "終端不透明度")]
-        [AnimationSlider("F1", "px", 0, 100)]
+        [AnimationSlider("F1", "％", 0, 100)]
         public Animation RandomEndOpacityRange { get; } = new Animation(0, 0, 100);
 
 
