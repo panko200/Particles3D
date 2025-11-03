@@ -2,10 +2,10 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using Particles3D;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Particles3D;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
 using YukkuriMovieMaker.Exo;
@@ -14,15 +14,15 @@ using YukkuriMovieMaker.Plugin.Effects;
 
 namespace Particles3D
 {
-    [VideoEffect("3Dパーティクル", ["アニメーション"], ["3Dparticles", "particles", "worldparticles", "パーティカル"])]
+    [VideoEffect("パーティクル3D", ["アニメーション"], ["3Dparticles", "particles", "worldparticles", "パーティカル"])]
     internal class Particles3DEffect : VideoEffectBase
     {
 
-        public override string Label => "3Dパーティクル";
+        public override string Label => "パーティクル3D";
 
         [Display(GroupName = "パーティクル", Name = "最大個数", Description = "アイテム全体で最大いくつのパーティクルを描画するか")]
         [AnimationSlider("F0", "", 1, 100)]
-        public Animation Count { get; } = new Animation(1, 1, 10000);
+        public Animation Count { get; } = new Animation(1, 1, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "描画", Name = "描画順反転", Description = "描画順反転")]
         [AnimationSlider("F0", "", 0, 1)]
@@ -65,6 +65,18 @@ namespace Particles3D
         [Display(GroupName = "座標", Name = "終端Z", Description = "終端Z")]
         [AnimationSlider("F1", "px", -100, 100)]
         public Animation EndZ { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        [Display(GroupName = "座標", Name = "初期Xと終端Xを同期", Description = "Xの初期値とXの終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。言わばランダムじゃないバージョン")]
+        [ToggleSlider]
+        public bool PSEToggleX { get => pSEToggleX; set => Set(ref pSEToggleX, value); }
+        bool pSEToggleX = false;
+        [Display(GroupName = "座標", Name = "初期Yと終端Yを同期", Description = "Yの初期値とYの終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。言わばランダムじゃないバージョン")]
+        [ToggleSlider]
+        public bool PSEToggleY { get => pSEToggleY; set => Set(ref pSEToggleY, value); }
+        bool pSEToggleY = false;
+        [Display(GroupName = "座標", Name = "初期Zと終端Zを同期", Description = "Zの初期値とZの終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。言わばランダムじゃないバージョン")]
+        [ToggleSlider]
+        public bool PSEToggleZ { get => pSEToggleZ; set => Set(ref pSEToggleZ, value); }
+        bool pSEToggleZ = false;
 
         [Display(GroupName = "拡大率", Name = "終端X拡大率", Description = "終端X拡大率")]
         [AnimationSlider("F1", "％", 0, 100)]
@@ -122,7 +134,7 @@ namespace Particles3D
 
         [Display(GroupName = "ランダム", Name = "周期X座標", Description = "周期X座標")]
         [AnimationSlider("F0", "周期", 1, 10)]
-        public Animation RandomXCount { get; } = new Animation(10, 1, 100);
+        public Animation RandomXCount { get; } = new Animation(1, 1, 100);
 
         [Display(GroupName = "ランダム", Name = "初期X座標範囲", Description = "初期X座標範囲")]
         [AnimationSlider("F1", "px", -100, 100)]
@@ -144,7 +156,7 @@ namespace Particles3D
 
         [Display(GroupName = "ランダム", Name = "周期Y座標", Description = "周期Y座標")]
         [AnimationSlider("F0", "周期", 1, 10)]
-        public Animation RandomYCount { get; } = new Animation(10, 1, 100);
+        public Animation RandomYCount { get; } = new Animation(1, 1, 100);
 
         [Display(GroupName = "ランダム", Name = "初期Y座標範囲", Description = "初期Y座標範囲")]
         [AnimationSlider("F1", "px", -100, 100)]
@@ -166,7 +178,7 @@ namespace Particles3D
 
         [Display(GroupName = "ランダム", Name = "周期座標Z", Description = "周期Z座標")]
         [AnimationSlider("F0", "周期", 1, 10)]
-        public Animation RandomZCount { get; } = new Animation(10, 1, 100);
+        public Animation RandomZCount { get; } = new Animation(1, 1, 100);
 
         [Display(GroupName = "ランダム", Name = "初期Z座標範囲", Description = "初期Z座標範囲")]
         [AnimationSlider("F1", "px", -100, 100)]
@@ -184,9 +196,13 @@ namespace Particles3D
         [ToggleSlider]
         public bool RandomSEScaleToggle { get => randomSEScaleToggle; set => Set(ref randomSEScaleToggle, value); }
         bool randomSEScaleToggle = false;
+        [Display(GroupName = "ランダム", Name = "拡大率X,Y,Z同期", Description = "拡大率のX,Y,Zが一緒に動くようになります。縦長になったりすることがなくなります。")]
+        [ToggleSlider]
+        public bool RandomSyScaleToggle { get => randomSyScaleToggle; set => Set(ref randomSyScaleToggle, value); }
+        bool randomSyScaleToggle = false;
         [Display(GroupName = "ランダム", Name = "周期拡大率", Description = "周期拡大率")]
         [AnimationSlider("F0", "周期", 1, 10)]
-        public Animation RandomScaleCount { get; } = new Animation(10, 1, 100);
+        public Animation RandomScaleCount { get; } = new Animation(1, 1, 100);
         [Display(GroupName = "ランダム", Name = "初期拡大率", Description = "初期拡大率")]
         [AnimationSlider("F1", "％", -100, 100)]
         public Animation RandomStartScaleRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
@@ -194,23 +210,57 @@ namespace Particles3D
         [AnimationSlider("F1", "％", -100, 100)]
         public Animation RandomEndScaleRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
 
-        [Display(GroupName = "ランダム", Name = "回転ランダム有効化", Description = "回転ランダムを有効化します。")]
+        [Display(GroupName = "ランダム", Name = "X回転ランダム有効化", Description = "X回転ランダムを有効化します。")]
         [ToggleSlider]
-        public bool RandomRotToggle { get => randomRotToggle; set => Set(ref randomRotToggle, value); }
-        bool randomRotToggle = false;
-        [Display(GroupName = "ランダム", Name = "回転初期と終端同期", Description = "回転の初期値と回転の終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。")]
+        public bool RandomRotXToggle { get => randomRotXToggle; set => Set(ref randomRotXToggle, value); }
+        bool randomRotXToggle = false;
+        [Display(GroupName = "ランダム", Name = "X回転初期と終端同期", Description = "X回転の初期値と回転の終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。")]
         [ToggleSlider]
-        public bool RandomSERotToggle { get => randomSERotToggle; set => Set(ref randomSERotToggle, value); }
-        bool randomSERotToggle = false;
-        [Display(GroupName = "ランダム", Name = "周期回転", Description = "周期回転")]
+        public bool RandomSERotXToggle { get => randomSERotXToggle; set => Set(ref randomSERotXToggle, value); }
+        bool randomSERotXToggle = false;
+        [Display(GroupName = "ランダム", Name = "周期X回転", Description = "周期X回転")]
         [AnimationSlider("F0", "周期", 1, 10)]
-        public Animation RandomRotCount { get; } = new Animation(10, 1, 100);
-        [Display(GroupName = "ランダム", Name = "初期回転", Description = "初期回転")]
+        public Animation RandomRotXCount { get; } = new Animation(1, 1, 100);
+        [Display(GroupName = "ランダム", Name = "初期X回転", Description = "初期X回転")]
         [AnimationSlider("F1", "°", -360, 360)]
-        public Animation RandomStartRotRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
-        [Display(GroupName = "ランダム", Name = "終端回転", Description = "終端回転")]
+        public Animation RandomStartRotXRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        [Display(GroupName = "ランダム", Name = "終端X回転", Description = "終端X回転")]
         [AnimationSlider("F1", "°", -360, 360)]
-        public Animation RandomEndRotRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        public Animation RandomEndRotXRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        [Display(GroupName = "ランダム", Name = "Y回転ランダム有効化", Description = "Y回転ランダムを有効化します。")]
+        [ToggleSlider]
+        public bool RandomRotYToggle { get => randomRotYToggle; set => Set(ref randomRotYToggle, value); }
+        bool randomRotYToggle = false;
+        [Display(GroupName = "ランダム", Name = "Y回転初期と終端同期", Description = "Y回転の初期値と回転の終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。")]
+        [ToggleSlider]
+        public bool RandomSERotYToggle { get => randomSERotYToggle; set => Set(ref randomSERotYToggle, value); }
+        bool randomSERotYToggle = false;
+        [Display(GroupName = "ランダム", Name = "周期Y回転", Description = "周期Y回転")]
+        [AnimationSlider("F0", "周期", 1, 10)]
+        public Animation RandomRotYCount { get; } = new Animation(1, 1, 100);
+        [Display(GroupName = "ランダム", Name = "初期Y回転", Description = "初期Y回転")]
+        [AnimationSlider("F1", "°", -360, 360)]
+        public Animation RandomStartRotYRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        [Display(GroupName = "ランダム", Name = "終端Y回転", Description = "終端Y回転")]
+        [AnimationSlider("F1", "°", -360, 360)]
+        public Animation RandomEndRotYRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        [Display(GroupName = "ランダム", Name = "Z回転ランダム有効化", Description = "Z回転ランダムを有効化します。")]
+        [ToggleSlider]
+        public bool RandomRotZToggle { get => randomRotZToggle; set => Set(ref randomRotZToggle, value); }
+        bool randomRotZToggle = false;
+        [Display(GroupName = "ランダム", Name = "Z回転初期と終端同期", Description = "Z回転の初期値と回転の終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。")]
+        [ToggleSlider]
+        public bool RandomSERotZToggle { get => randomSERotZToggle; set => Set(ref randomSERotZToggle, value); }
+        bool randomSERotZToggle = false;
+        [Display(GroupName = "ランダム", Name = "周期Z回転", Description = "周期Z回転")]
+        [AnimationSlider("F0", "周期", 1, 10)]
+        public Animation RandomRotZCount { get; } = new Animation(1, 1, 100);
+        [Display(GroupName = "ランダム", Name = "初期Z回転", Description = "初期Z回転")]
+        [AnimationSlider("F1", "°", -360, 360)]
+        public Animation RandomStartRotZRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
+        [Display(GroupName = "ランダム", Name = "終端Z回転", Description = "終端Z回転")]
+        [AnimationSlider("F1", "°", -360, 360)]
+        public Animation RandomEndRotZRange { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "ランダム", Name = "不透明度ランダム有効化", Description = "不透明度ランダムを有効化します。")]
         [ToggleSlider]
@@ -222,7 +272,7 @@ namespace Particles3D
         bool randomSEOpacityToggle = false;
         [Display(GroupName = "ランダム", Name = "周期不透明度", Description = "周期不透明度")]
         [AnimationSlider("F0", "周期", 1, 10)]
-        public Animation RandomOpacityCount { get; } = new Animation(10, 1, 100);
+        public Animation RandomOpacityCount { get; } = new Animation(1, 1, 100);
         [Display(GroupName = "ランダム", Name = "初期不透明度", Description = "初期不透明度")]
         [AnimationSlider("F1", "％", 0, 100)]
         public Animation RandomStartOpacityRange { get; } = new Animation(0, 0, 100);
@@ -238,11 +288,11 @@ namespace Particles3D
         public Animation RandomSeed { get; } = new Animation(1, 1, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "パーティクル", Name = "生成フレーム周期", Description = "次のパーティクルを出すフレーム間隔")]
-        [AnimationSlider("F1", "", 0.1, 100)]
-        public Animation CycleTime { get; } = new Animation(1, 0.1, YMM4Constants.VeryLargeValue);
+        [AnimationSlider("F2", "f", 0.01, 100)]
+        public Animation CycleTime { get; } = new Animation(1, 0.01, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "パーティクル", Name = "個体移動フレーム", Description = "パーティクルが初期値から終端値まで移動するフレーム時間")]
-        [AnimationSlider("F1", "", 0.1, 100)]
+        [AnimationSlider("F1", "f", 0.1, 100)]
         public Animation TravelTime { get; } = new Animation(1, 0.1, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "パーティクル", Name = "軌道固定", Description = "終端値のアニメーションを生成時の値に固定します。")]
@@ -268,8 +318,10 @@ namespace Particles3D
         [Display(GroupName = "重力", Name = "重力Z", Description = "Z 軸方向の重力（加速度）の強さ。負の値は奥、正の値は手前へ引っ張る")]
         [AnimationSlider("F1", "", -100, 100)]
         public Animation GravityZ { get; } = new Animation(0, YMM4Constants.VerySmallValue, YMM4Constants.VeryLargeValue);
-
-
+        [Display(GroupName = "重力", Name = "終端値に到着", Description = "重力の影響下でも絶対に終端値に到着するようになります。")]
+        [ToggleSlider]
+        public bool GrTerminationToggle { get => grTerminationToggle; set => Set(ref grTerminationToggle, value); }
+        bool grTerminationToggle = true;
 
         public override IEnumerable<string> CreateExoVideoFilters(int keyFrameIndex, ExoOutputDescription exoOutputDescription)
         {
@@ -280,12 +332,15 @@ namespace Particles3D
         {
             return new Particles3DEffectProcessor(devices, this);
         }
-
         protected override IEnumerable<IAnimatable> GetAnimatables() => [Count, ReverseDraw, StartX, StartY, StartZ, EndX, EndY, EndZ,
             ScaleX, ScaleY, ScaleZ, EndOpacity, StartOpacity,
             StartRotationX, StartRotationY, StartRotationZ,
             EndRotationX, EndRotationY, EndRotationZ, DelayTime,RandomXCount,RandomStartXRange,RandomEndXRange,RandomSeed,RandomYCount,RandomStartYRange,RandomEndYRange,RandomZCount,RandomStartZRange,RandomEndZRange,
-            CycleTime, TravelTime, GravityX, GravityY, GravityZ, CurveRange,RandomScaleCount,RandomStartScaleRange,RandomEndScaleRange,RandomRotCount,RandomStartRotRange,RandomEndRotRange,RandomOpacityCount,RandomStartOpacityRange,RandomEndOpacityRange
+            CycleTime, TravelTime, GravityX, GravityY, GravityZ, CurveRange,RandomScaleCount,RandomStartScaleRange,RandomEndScaleRange,
+            RandomRotXCount,RandomStartRotXRange,RandomEndRotXRange,RandomRotYCount,RandomStartRotYRange,RandomEndRotYRange,RandomRotZCount,RandomStartRotZRange,RandomEndRotZRange,
+            RandomOpacityCount,RandomStartOpacityRange,RandomEndOpacityRange
             ];
+
+
     }
 }

@@ -1,17 +1,30 @@
-﻿using System;
+﻿using Particles3D;
+using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
-using Particles3D;
 using Vortice.Direct2D1;
 using Vortice.Direct2D1.Effects;
 using Windows.Networking.NetworkOperators;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Player.Video;
 
+//--Todo--
+//UIのメモリもうちょっと何とかしたいところはあるけど、しゃーない。
+//初期と終端を同期するようにしたい。ただし、初期を動かすことで終端もつられて動く。しかし、終端は固定されることはない。(済)
+//不透明度もうちょっと直す。(済)
+//ScaleX,Y,Z同期設定を作る。(済)
+//回転をX,Y,Zわける。(済)
+//ScaleX,Y,Zの初期値作る
+//ScaleとOpacityのfixedStartArrayつくる
+//上からみてもビルボードver作成
+
+//--いつかできたら--
+//floor機能(Glueだけでも)
+//random HSL
 namespace Particles3D
 {
-    internal class Particles3DEffectProcessor : IVideoEffectProcessor
+    internal class Particles3DEffectProcessor : IVideoEffectProcessor, IDisposable
     {
         DisposeCollector disposer = new();
 
@@ -43,6 +56,9 @@ namespace Particles3D
         float[]? targetOpacityArray;
 
         float[]? curveFactorArray;
+        float[]? fixedPositionStartXArray;
+        float[]? fixedPositionStartYArray;
+        float[]? fixedPositionStartZArray;
         float[]? fixedPositionEndXArray;    // 固定された EndX 値
         float[]? fixedPositionEndYArray;    // 固定された EndY 値
         float[]? fixedPositionEndZArray;    // 固定された EndZ 値
@@ -50,6 +66,9 @@ namespace Particles3D
         float[]? fixedScaleEndYArray;
         float[]? fixedScaleEndZArray;
         float[]? fixedOpacityEndArray;
+        float[]? fixedRotationStartXArray;
+        float[]? fixedRotationStartYArray;
+        float[]? fixedRotationStartZArray;
         float[]? fixedRotationEndXArray;
         float[]? fixedRotationEndYArray;
         float[]? fixedRotationEndZArray;
@@ -82,16 +101,23 @@ namespace Particles3D
         float gravityX, gravityY, gravityZ;
         float curveRange;
         bool fixedTrajectory;
-        bool randomScaleToggle, randomRotToggle, randomOpacityToggle; // ランダムON/OFF
-        int randomScaleCount, randomRotCount, randomOpacityCount; // グループ数
+        bool randomScaleToggle, randomRotXToggle, randomRotYToggle, randomRotZToggle, randomOpacityToggle; // ランダムON/OFF
+        int randomScaleCount, randomRotXCount, randomRotYCount, randomRotZCount, randomOpacityCount; // グループ数
         float randomStartScaleRange, randomEndScaleRange; // スケールランダム幅
-        float randomStartRotRange, randomEndRotRange; // 回転ランダム幅
+        float randomStartRotXRange, randomEndRotXRange; // 回転ランダム幅
+        float randomStartRotYRange, randomEndRotYRange; // 回転ランダム幅
+        float randomStartRotZRange, randomEndRotZRange; // 回転ランダム幅
         float randomStartOpacityRange, randomEndOpacityRange; // 透明度ランダム幅
-        bool randomSEScaleToggle, randomSERotToggle, randomSEOpacityToggle; // Start/End連動トグル
+        bool randomSEScaleToggle, randomSERotXToggle, randomSERotYToggle, randomSERotZToggle, randomSEOpacityToggle; // Start/End連動トグル
         bool billboard;
+        bool grTerminationToggle;
+        bool randomSyScaleToggle;
+        bool pSEToggleX, pSEToggleY, pSEToggleZ;
 
         Vector3 rotation;
         Matrix4x4 camera;
+
+        private readonly List<ItemDrawData> _drawList = new List<ItemDrawData>();
 
         public ID2D1Image Output => commandList ?? throw new NullReferenceException(nameof(commandList) + " is null");
 
@@ -178,11 +204,21 @@ namespace Particles3D
             var randomEndScaleRange = (float)item.RandomEndScaleRange.GetValue(frame, length, fps);
             var randomSEScaleToggle = item.RandomSEScaleToggle;
 
-            var randomRotToggle = item.RandomRotToggle;
-            var randomRotCount = (int)item.RandomRotCount.GetValue(frame, length, fps);
-            var randomStartRotRange = (float)item.RandomStartRotRange.GetValue(frame, length, fps);
-            var randomEndRotRange = (float)item.RandomEndRotRange.GetValue(frame, length, fps);
-            var randomSERotToggle = item.RandomSERotToggle;
+            var randomRotXToggle = item.RandomRotXToggle;
+            var randomRotXCount = (int)item.RandomRotXCount.GetValue(frame, length, fps);
+            var randomStartRotXRange = (float)item.RandomStartRotXRange.GetValue(frame, length, fps);
+            var randomEndRotXRange = (float)item.RandomEndRotXRange.GetValue(frame, length, fps);
+            var randomSERotXToggle = item.RandomSERotXToggle;
+            var randomRotYToggle = item.RandomRotYToggle;
+            var randomRotYCount = (int)item.RandomRotYCount.GetValue(frame, length, fps);
+            var randomStartRotYRange = (float)item.RandomStartRotYRange.GetValue(frame, length, fps);
+            var randomEndRotYRange = (float)item.RandomEndRotYRange.GetValue(frame, length, fps);
+            var randomSERotYToggle = item.RandomSERotYToggle;
+            var randomRotZToggle = item.RandomRotZToggle;
+            var randomRotZCount = (int)item.RandomRotZCount.GetValue(frame, length, fps);
+            var randomStartRotZRange = (float)item.RandomStartRotZRange.GetValue(frame, length, fps);
+            var randomEndRotZRange = (float)item.RandomEndRotZRange.GetValue(frame, length, fps);
+            var randomSERotZToggle = item.RandomSERotZToggle;
 
             var randomOpacityToggle = item.RandomOpacityToggle;
             var randomOpacityCount = (int)item.RandomOpacityCount.GetValue(frame, length, fps);
@@ -191,6 +227,14 @@ namespace Particles3D
             var randomSEOpacityToggle = item.RandomSEOpacityToggle;
 
             var billboard = item.BillboardDraw;
+
+            var grTerminationToggle = item.GrTerminationToggle;
+
+            var randomSyScaleToggle = item.RandomSyScaleToggle;
+
+            var pSEToggleX = item.PSEToggleX;
+            var pSEToggleY = item.PSEToggleY;
+            var pSEToggleZ = item.PSEToggleZ;
 
             //---random関連---
             // randomXCountが0だと0除算や計算がおかしくなるので、1以上に強制する
@@ -208,14 +252,17 @@ namespace Particles3D
                 this.randomYCount != randomYCount || this.randomStartYRange != randomStartYRange || this.randomEndYRange != randomEndYRange || this.endy != endy || this.randomSEToggleY != randomSEToggleY ||
                 this.randomZCount != randomZCount || this.randomStartZRange != randomStartZRange || this.randomEndZRange != randomEndZRange || this.endz != endz || this.randomSEToggleZ != randomSEToggleZ ||
                 this.curveRange != curveRange || this.curveToggle != curveToggle || this.fixedTrajectory != fixedTrajectory ||
-                this.gravityX != gravityX || this.gravityY != gravityY || this.gravityZ != gravityZ ||
+                this.gravityX != gravityX || this.gravityY != gravityY || this.gravityZ != gravityZ || this.grTerminationToggle != grTerminationToggle ||
                 this.endopacity != endopacity ||
                 this.endRotationX != endRotationX || this.endRotationY != endRotationY || this.endRotationZ != endRotationZ ||
-                this.scalex != scalex || this.scaley != scaley || this.scalez != scalez ||
+                this.scalex != scalex || this.scaley != scaley || this.scalez != scalez || this.randomSyScaleToggle != randomSyScaleToggle ||
                 this.randomScaleCount != randomScaleCount || this.randomStartScaleRange != randomStartScaleRange || this.randomEndScaleRange != randomEndScaleRange || this.randomSEScaleToggle != randomSEScaleToggle ||
-                this.randomRotCount != randomRotCount || this.randomStartRotRange != randomStartRotRange || this.randomEndRotRange != randomEndRotRange || this.randomSERotToggle != randomSERotToggle ||
+                this.randomRotXCount != randomRotXCount || this.randomStartRotXRange != randomStartRotXRange || this.randomEndRotXRange != randomEndRotXRange || this.randomSERotXToggle != randomSERotXToggle ||
+                this.randomRotYCount != randomRotYCount || this.randomStartRotYRange != randomStartRotYRange || this.randomEndRotYRange != randomEndRotYRange || this.randomSERotYToggle != randomSERotYToggle ||
+                this.randomRotZCount != randomRotZCount || this.randomStartRotZRange != randomStartRotZRange || this.randomEndRotZRange != randomEndRotZRange || this.randomSERotZToggle != randomSERotZToggle ||
                 this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange || this.randomSEOpacityToggle != randomSEOpacityToggle ||
-                this.billboard != billboard || this.startx != startx || this.starty != starty || this.startz != startz;
+                this.billboard != billboard || this.startx != startx || this.starty != starty || this.startz != startz ||
+                this.pSEToggleX != pSEToggleX || this.pSEToggleY != pSEToggleY || this.pSEToggleZ != pSEToggleZ;
 
             //もしこれに該当しなかったら描画更新しない
             if (isFirst || IsInputChanged || this.frame != frame || this.count != count || this.startx != startx || this.starty != starty || this.startz != startz ||
@@ -231,9 +278,12 @@ namespace Particles3D
                 this.gravityX != gravityX || this.gravityY != gravityY || this.gravityZ != gravityZ || this.curveRange != curveRange || this.curveToggle != curveToggle ||
                 this.cycleTime != cycleTime || this.travelTime != travelTime || this.fixedTrajectory != fixedTrajectory ||
                 this.randomScaleToggle != randomScaleToggle || this.randomScaleCount != randomScaleCount || this.randomStartScaleRange != randomStartScaleRange || this.randomEndScaleRange != randomEndScaleRange || this.randomSEScaleToggle != randomSEScaleToggle ||
-                this.randomRotToggle != randomRotToggle || this.randomRotCount != randomRotCount || this.randomStartRotRange != randomStartRotRange || this.randomEndRotRange != randomEndRotRange || this.randomSERotToggle != randomSERotToggle ||
+                this.randomRotXToggle != randomRotXToggle || this.randomRotXCount != randomRotXCount || this.randomStartRotXRange != randomStartRotXRange || this.randomEndRotXRange != randomEndRotXRange || this.randomSERotXToggle != randomSERotXToggle ||
+                this.randomRotYToggle != randomRotYToggle || this.randomRotYCount != randomRotYCount || this.randomStartRotYRange != randomStartRotYRange || this.randomEndRotYRange != randomEndRotYRange || this.randomSERotYToggle != randomSERotYToggle ||
+                this.randomRotZToggle != randomRotZToggle || this.randomRotZCount != randomRotZCount || this.randomStartRotZRange != randomStartRotZRange || this.randomEndRotZRange != randomEndRotZRange || this.randomSERotZToggle != randomSERotZToggle ||
                 this.randomOpacityToggle != randomOpacityToggle || this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange || this.randomSEOpacityToggle != randomSEOpacityToggle ||
-                this.billboard != billboard
+                this.billboard != billboard || this.randomSyScaleToggle != randomSyScaleToggle ||
+                this.pSEToggleX != pSEToggleX || this.pSEToggleY != pSEToggleY || this.pSEToggleZ != pSEToggleZ || this.grTerminationToggle != grTerminationToggle
                 /* || this.easingType != item.EasingType || this.easingMode != item.EasingMode */)
             {
 
@@ -291,18 +341,46 @@ namespace Particles3D
                 this.randomStartScaleRange = randomStartScaleRange;
                 this.randomEndScaleRange = randomEndScaleRange;
                 this.randomSEScaleToggle = randomSEScaleToggle;
-                this.randomRotToggle = randomRotToggle;
-                this.randomRotCount = randomRotCount;
-                this.randomStartRotRange = randomStartRotRange;
-                this.randomEndRotRange = randomEndRotRange;
-                this.randomSERotToggle = randomSERotToggle;
+                this.randomRotXToggle = randomRotXToggle;
+                this.randomRotXCount = randomRotXCount;
+                this.randomStartRotXRange = randomStartRotXRange;
+                this.randomEndRotXRange = randomEndRotXRange;
+                this.randomSERotXToggle = randomSERotXToggle;
+                this.randomRotYToggle = randomRotYToggle;
+                this.randomRotYCount = randomRotYCount;
+                this.randomStartRotYRange = randomStartRotYRange;
+                this.randomEndRotYRange = randomEndRotYRange;
+                this.randomSERotYToggle = randomSERotYToggle;
+                this.randomRotZToggle = randomRotZToggle;
+                this.randomRotZCount = randomRotZCount;
+                this.randomStartRotZRange = randomStartRotZRange;
+                this.randomEndRotZRange = randomEndRotZRange;
+                this.randomSERotZToggle = randomSERotZToggle;
                 this.randomOpacityToggle = randomOpacityToggle;
                 this.randomOpacityCount = randomOpacityCount;
                 this.randomStartOpacityRange = randomStartOpacityRange;
                 this.randomEndOpacityRange = randomEndOpacityRange;
                 this.randomSEOpacityToggle = randomSEOpacityToggle;
                 this.billboard = billboard;
+                this.grTerminationToggle = grTerminationToggle;
+                this.randomSyScaleToggle = randomSyScaleToggle;
+                this.pSEToggleX = pSEToggleX;
+                this.pSEToggleY = pSEToggleY;
+                this.pSEToggleZ = pSEToggleZ;
 
+
+                if (pSEToggleX)
+                {
+                    this.endx = this.startx + this.endx;
+                }
+                if (pSEToggleY)
+                {
+                    this.endy = this.starty + this.endy;
+                }
+                if (pSEToggleZ)
+                {
+                    this.endz = this.startz + this.endz;
+                }
 
                 //---random関連---
                 if (arrayNeedsUpdate) // arrayNeedsUpdate が true ならば、this.変数への代入は実行済み
@@ -321,6 +399,9 @@ namespace Particles3D
                     }
                     if (this.fixedTrajectory)
                     {
+                        this.fixedPositionStartXArray = new float[this.count];
+                        this.fixedPositionStartYArray = new float[this.count];
+                        this.fixedPositionStartZArray = new float[this.count];
                         this.fixedPositionEndXArray = new float[this.count];
                         this.fixedPositionEndYArray = new float[this.count];
                         this.fixedPositionEndZArray = new float[this.count];
@@ -332,6 +413,9 @@ namespace Particles3D
                         this.fixedScaleEndZArray = new float[this.count];
 
                         // ★ 回転固定配列の初期化
+                        this.fixedRotationStartXArray = new float[this.count];
+                        this.fixedRotationStartYArray = new float[this.count];
+                        this.fixedRotationStartZArray = new float[this.count];
                         this.fixedRotationEndXArray = new float[this.count];
                         this.fixedRotationEndYArray = new float[this.count];
                         this.fixedRotationEndZArray = new float[this.count];
@@ -349,9 +433,33 @@ namespace Particles3D
                             // 個体 i の射出フレーム時間 T_launch を計算
 
                             // 射出時間におけるアニメーション値（EndX の値）を評価し、配列に記憶
-                            this.fixedPositionEndXArray[i] = (float)item.EndX.GetValue(T_launch_long, length, fps);
-                            this.fixedPositionEndYArray[i] = (float)item.EndY.GetValue(T_launch_long, length, fps);
-                            this.fixedPositionEndZArray[i] = (float)item.EndZ.GetValue(T_launch_long, length, fps);
+                            float launch_StartX = (float)item.StartX.GetValue(T_launch_long, length, fps);
+                            float launch_StartY = (float)item.StartY.GetValue(T_launch_long, length, fps);
+                            float launch_StartZ = (float)item.StartZ.GetValue(T_launch_long, length, fps);
+
+                            this.fixedPositionStartXArray[i] = launch_StartX;
+                            this.fixedPositionStartYArray[i] = launch_StartY;
+                            this.fixedPositionStartZArray[i] = launch_StartZ;
+                            // ★★★ 始点記憶ここまで ★★★
+
+                            // 射出時間におけるアニメーション値（EndX の値）を評価し、配列に記憶
+                            float launch_EndX = (float)item.EndX.GetValue(T_launch_long, length, fps);
+                            float launch_EndY = (float)item.EndY.GetValue(T_launch_long, length, fps);
+                            float launch_EndZ = (float)item.EndZ.GetValue(T_launch_long, length, fps);
+
+                            this.fixedPositionEndXArray[i] = launch_EndX;
+                            this.fixedPositionEndYArray[i] = launch_EndY;
+                            this.fixedPositionEndZArray[i] = launch_EndZ;
+
+                            // pSEToggle (始点終点同期) の処理
+                            // ※pSEToggleがONの時は、始点の値 (launch_StartX) を使って計算
+                            if (pSEToggleX)
+                                this.fixedPositionEndXArray[i] = launch_StartX + launch_EndX; // あなたの元のロジック
+                            if (pSEToggleY)
+                                this.fixedPositionEndYArray[i] = launch_StartY + launch_EndY; // あなたの元のロジック
+                            if (pSEToggleZ)
+                                this.fixedPositionEndZArray[i] = launch_StartZ + launch_EndZ; // あなたの元のロジック
+
                             this.fixedGravityXArray[i] = (float)item.GravityX.GetValue(T_launch_long, length, fps);
                             this.fixedGravityYArray[i] = (float)item.GravityY.GetValue(T_launch_long, length, fps);
                             this.fixedGravityZArray[i] = (float)item.GravityZ.GetValue(T_launch_long, length, fps);
@@ -364,6 +472,9 @@ namespace Particles3D
                             this.fixedRotationEndXArray[i] = (float)item.EndRotationX.GetValue(T_launch_long, length, fps);
                             this.fixedRotationEndYArray[i] = (float)item.EndRotationY.GetValue(T_launch_long, length, fps);
                             this.fixedRotationEndZArray[i] = (float)item.EndRotationZ.GetValue(T_launch_long, length, fps);
+                            this.fixedRotationStartXArray[i] = (float)item.StartRotationX.GetValue(T_launch_long, length, fps);
+                            this.fixedRotationStartYArray[i] = (float)item.StartRotationY.GetValue(T_launch_long, length, fps);
+                            this.fixedRotationStartZArray[i] = (float)item.StartRotationZ.GetValue(T_launch_long, length, fps);
 
                             // ★ 透明度固定値の計算と格納
                             this.fixedOpacityEndArray[i] = (float)item.EndOpacity.GetValue(T_launch_long, length, fps);
@@ -378,8 +489,19 @@ namespace Particles3D
                     this.startXArray = new float[numberOfGroupsX];
                     for (int g = 0; g < numberOfGroupsX; g++)
                     {
+                        // ★★★ グループgの代表インデックスiを計算 ★★★
+                        int i = g * Math.Max(1, this.randomXCount);
+
+                        // ★★★ ベースとなる始点を決定 ★★★
+                        float baseStartX = this.startx; // デフォルトは現在の始点
+                        if (this.fixedTrajectory && this.fixedPositionStartXArray != null && this.fixedPositionStartXArray.Length > i)
+                        {
+                            baseStartX = this.fixedPositionStartXArray[i]; // 軌道固定時は、射出時の始点
+                        }
+
                         float randomOffset = (float)staticRng.NextDouble() * this.randomStartXRange - (this.randomStartXRange / 2.0f);
-                        this.startXArray[g] = this.startx + randomOffset;
+                        // ★★★ ベース始点(baseStartX)に対してオフセットをかける ★★★
+                        this.startXArray[g] = baseStartX + randomOffset;
                     }
 
                     // --- 終点 (EndX) の配列計算 ---
@@ -388,21 +510,29 @@ namespace Particles3D
                     {
                         int i = g * Math.Max(1, this.randomXCount);
 
-                        float baseEnd = this.endx;
-
+                        // 1. ベースとなる終点(baseEnd)を決定
+                        float baseEnd = this.endx; // デフォルトは現在の終点
                         if (this.fixedTrajectory && this.fixedPositionEndXArray != null && this.fixedPositionEndXArray.Length > i)
                         {
-                            baseEnd = this.fixedPositionEndXArray[i];
+                            baseEnd = this.fixedPositionEndXArray[i]; // 軌道固定時は、射出時の終点
                         }
 
-                        // 2. Random SEToggleX によるオフセットの適用 (既存ロジック)
+                        // 2. Random SEToggleX によるオフセットの適用
                         if (this.randomSEToggleX && this.startXArray != null && this.startXArray.Length > g)
                         {
-                            float startXOffset = this.startXArray[g] - this.startx;
-                            baseEnd += startXOffset; // baseEnd = (固定値 or 現在のアニメーション値) + オフセット
+                            // ★★★ ベースとなる始点も固定軌道を考慮する ★★★
+                            float baseStartX = this.startx; // デフォルト
+                            if (this.fixedTrajectory && this.fixedPositionStartXArray != null && this.fixedPositionStartXArray.Length > i)
+                            {
+                                baseStartX = this.fixedPositionStartXArray[i]; // 軌道固定時
+                            }
+                            // ★★★ 修正ここまで ★★★
+
+                            float startXOffset = this.startXArray[g] - baseStartX; // ランダム始点と「ベース始点」の差
+                            baseEnd += startXOffset;
                         }
 
-                        // 3. EndX のランダム範囲の適用 (既存ロジック)
+                        // 3. EndX のランダム範囲の適用
                         float randomOffset = (float)staticRng.NextDouble() * this.randomEndXRange - (this.randomEndXRange / 2.0f);
                         this.targetXArray[g] = baseEnd + randomOffset;
                     }
@@ -410,36 +540,51 @@ namespace Particles3D
                     // --- Y軸の配列計算 ---
                     int numberOfGroupsY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomYCount));
 
-                    // --- 始点 (StartX) の配列計算 ---
+                    // --- 始点 (StartY) の配列計算 ---
                     this.startYArray = new float[numberOfGroupsY];
                     for (int g = 0; g < numberOfGroupsY; g++)
                     {
+                        int i = g * Math.Max(1, this.randomYCount);
+
+                        // ★★★ ベースとなる始点を決定 ★★★
+                        float baseStartY = this.starty;
+                        if (this.fixedTrajectory && this.fixedPositionStartYArray != null && this.fixedPositionStartYArray.Length > i)
+                        {
+                            baseStartY = this.fixedPositionStartYArray[i];
+                        }
+
                         float randomOffset = (float)staticRng.NextDouble() * this.randomStartYRange - (this.randomStartYRange / 2.0f);
-                        this.startYArray[g] = this.starty + randomOffset;
+                        this.startYArray[g] = baseStartY + randomOffset;
                     }
 
-                    // --- 終点 (EndX) の配列計算 ---
+                    // --- 終点 (EndY) の配列計算 ---
                     this.targetYArray = new float[numberOfGroupsY];
                     for (int g = 0; g < numberOfGroupsY; g++)
                     {
                         int i = g * Math.Max(1, this.randomYCount);
 
+                        // 1. ベースとなる終点(baseEnd)を決定
                         float baseEnd = this.endy;
-
-                        // ★ RandomSEToggleX が ON の場合、EndX のベースを StartX のランダム値でオフセットする
                         if (this.fixedTrajectory && this.fixedPositionEndYArray != null && this.fixedPositionEndYArray.Length > i)
                         {
                             baseEnd = this.fixedPositionEndYArray[i];
                         }
 
-                        // 2. Random SEToggleX によるオフセットの適用 (既存ロジック)
+                        // 2. Random SEToggleY によるオフセットの適用
                         if (this.randomSEToggleY && this.startYArray != null && this.startYArray.Length > g)
                         {
-                            float startYOffset = this.startYArray[g] - this.starty;
-                            baseEnd += startYOffset; // baseEnd = (固定値 or 現在のアニメーション値) + オフセット
+                            // ★★★ ベースとなる始点も固定軌道を考慮する ★★★
+                            float baseStartY = this.starty;
+                            if (this.fixedTrajectory && this.fixedPositionStartYArray != null && this.fixedPositionStartYArray.Length > i)
+                            {
+                                baseStartY = this.fixedPositionStartYArray[i];
+                            }
+
+                            float startYOffset = this.startYArray[g] - baseStartY;
+                            baseEnd += startYOffset;
                         }
 
-                        // EndX のランダム範囲を適用
+                        // 3. EndY のランダム範囲の適用
                         float randomOffset = (float)staticRng.NextDouble() * this.randomEndYRange - (this.randomEndYRange / 2.0f);
                         this.targetYArray[g] = baseEnd + randomOffset;
                     }
@@ -447,37 +592,51 @@ namespace Particles3D
                     // --- Z軸の配列計算 ---
                     int numberOfGroupsZ = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomZCount));
 
-                    // --- 始点 (StartX) の配列計算 ---
+                    // --- 始点 (StartZ) の配列計算 ---
                     this.startZArray = new float[numberOfGroupsZ];
                     for (int g = 0; g < numberOfGroupsZ; g++)
                     {
+                        int i = g * Math.Max(1, this.randomZCount);
+
+                        // ★★★ ベースとなる始点を決定 ★★★
+                        float baseStartZ = this.startz;
+                        if (this.fixedTrajectory && this.fixedPositionStartZArray != null && this.fixedPositionStartZArray.Length > i)
+                        {
+                            baseStartZ = this.fixedPositionStartZArray[i];
+                        }
+
                         float randomOffset = (float)staticRng.NextDouble() * this.randomStartZRange - (this.randomStartZRange / 2.0f);
-                        this.startZArray[g] = this.startz + randomOffset;
+                        this.startZArray[g] = baseStartZ + randomOffset;
                     }
 
-                    // --- 終点 (EndX) の配列計算 ---
+                    // --- 終点 (EndZ) の配列計算 ---
                     this.targetZArray = new float[numberOfGroupsZ];
                     for (int g = 0; g < numberOfGroupsZ; g++)
                     {
-                        // グループ内の最初の個体 i のインデックス
                         int i = g * Math.Max(1, this.randomZCount);
 
+                        // 1. ベースとなる終点(baseEnd)を決定
                         float baseEnd = this.endz;
-
                         if (this.fixedTrajectory && this.fixedPositionEndZArray != null && this.fixedPositionEndZArray.Length > i)
                         {
                             baseEnd = this.fixedPositionEndZArray[i];
                         }
 
-                        // ★ RandomSEToggleX が ON の場合、EndX のベースを StartX のランダム値でオフセットする
+                        // 2. Random SEToggleZ によるオフセットの適用
                         if (this.randomSEToggleZ && this.startZArray != null && this.startZArray.Length > g)
                         {
-                            // StartX のランダム値と EndX の差 (EndX - StartX) を維持するようにオフセットを調整
-                            float startZOffset = this.startZArray[g] - this.startz;
+                            // ★★★ ベースとなる始点も固定軌道を考慮する ★★★
+                            float baseStartZ = this.startz;
+                            if (this.fixedTrajectory && this.fixedPositionStartZArray != null && this.fixedPositionStartZArray.Length > i)
+                            {
+                                baseStartZ = this.fixedPositionStartZArray[i];
+                            }
+
+                            float startZOffset = this.startZArray[g] - baseStartZ;
                             baseEnd += startZOffset;
                         }
 
-                        // EndX のランダム範囲を適用
+                        // 3. EndZ のランダム範囲の適用
                         float randomOffset = (float)staticRng.NextDouble() * this.randomEndZRange - (this.randomEndZRange / 2.0f);
                         this.targetZArray[g] = baseEnd + randomOffset;
                     }
@@ -515,6 +674,7 @@ namespace Particles3D
                         float endXOffset = (float)staticRng.NextDouble() * this.randomEndScaleRange - (this.randomEndScaleRange / 2.0f);
                         this.targetScaleXArray[g] = baseEnd + endXOffset;
                     }
+
                     // --- Scale Y軸の配列計算 ---
                     int numberOfGroupsScaleY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomScaleCount));
                     this.startScaleYArray = new float[numberOfGroupsScaleY];
@@ -583,113 +743,198 @@ namespace Particles3D
                         float endZOffset = (float)staticRng.NextDouble() * this.randomEndScaleRange - (this.randomEndScaleRange / 2.0f);
                         this.targetScaleZArray[g] = baseEnd + endZOffset;
                     }
-                    //回転X
-                    int numberOfGroupsRotX = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotCount));
-                    this.startRotationXArray = new float[numberOfGroupsRotX];
-                    this.targetRotationXArray = new float[numberOfGroupsRotX];
 
-                    for (int g = 0; g < numberOfGroupsRotX; g++)
+                    if (this.randomSyScaleToggle)
                     {
-                        int i = g * Math.Max(1, this.randomRotCount);
+                        int minLength = Math.Min(this.startScaleXArray.Length,
+                                        Math.Min(this.startScaleYArray.Length, this.startScaleZArray.Length));
 
-                        // 1. 始点のランダム値計算
-                        float startXOffset = (float)staticRng!.NextDouble() * this.randomStartRotRange - (this.randomStartRotRange / 2.0f);
-                        this.startRotationXArray[g] = this.startRotationX + startXOffset;
-
-                        // 2. 終点のベース値決定 (FixedTrajectoryのチェック)
-                        float baseEnd = this.endRotationX;
-                        if (this.fixedTrajectory && this.fixedRotationEndXArray != null && this.fixedRotationEndXArray.Length > i)
+                        for (int g = 0; g < minLength; g++)
                         {
-                            baseEnd = this.fixedRotationEndXArray[i];
+                            this.startScaleYArray[g] = this.startScaleXArray[g];
+                            this.targetScaleYArray[g] = this.targetScaleXArray[g];
+                            this.startScaleZArray[g] = this.startScaleXArray[g];
+                            this.targetScaleZArray[g] = this.targetScaleXArray[g];
                         }
-
-                        // 3. SEToggle の適用
-                        if (this.randomSERotToggle && this.startRotationXArray != null && this.startRotationXArray.Length > g)
-                        {
-                            float startOffset = this.startRotationXArray[g] - this.startRotationX;
-                            baseEnd += startOffset;
-                        }
-
-                        // 4. 終点のランダムオフセットを適用
-                        float endXOffset = (float)staticRng.NextDouble() * this.randomEndRotRange - (this.randomEndRotRange / 2.0f);
-                        this.targetRotationXArray[g] = baseEnd + endXOffset;
                     }
 
+                    //回転X
+                    int numberOfGroupsRotX = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotXCount));
+                    this.startRotationXArray = new float[numberOfGroupsRotX];
+                    this.targetRotationXArray = new float[numberOfGroupsRotX];
+                    for (int g = 0; g < numberOfGroupsRotX; g++)
+                    {
+                        // ★★★ グループgの代表インデックスiを計算 ★★★
+                        int i = g * Math.Max(1, this.randomRotXCount);
+
+                        // ★★★ ベースとなる始点を決定 ★★★
+                        float baseStartX = this.startRotationX; // デフォルトは現在の始点
+                        if (this.fixedTrajectory && this.fixedRotationStartXArray != null && this.fixedRotationStartXArray.Length > i)
+                        {
+                            baseStartX = this.fixedRotationStartXArray[i]; // 軌道固定時は、射出時の始点
+                        }
+
+                        float randomOffset = (float)staticRng.NextDouble() * this.randomStartRotXRange - (this.randomStartRotXRange / 2.0f);
+                        // ★★★ ベース始点(baseStartX)に対してオフセットをかける ★★★
+                        this.startRotationXArray[g] = baseStartX + randomOffset;
+                    }
+                    for (int g = 0; g < numberOfGroupsX; g++)
+                    {
+                        int i = g * Math.Max(1, this.randomRotXCount);
+
+                        // 1. ベースとなる終点(baseEnd)を決定
+                        float baseEnd = this.endRotationX; // デフォルトは現在の終点
+                        if (this.fixedTrajectory && this.fixedRotationEndXArray != null && this.fixedRotationEndXArray.Length > i)
+                        {
+                            baseEnd = this.fixedRotationEndXArray[i]; // 軌道固定時は、射出時の終点
+                        }
+
+                        // 2. Random SEToggleX によるオフセットの適用
+                        if (this.randomSERotXToggle && this.startRotationXArray != null && this.startRotationXArray.Length > g)
+                        {
+                            // ★★★ ベースとなる始点も固定軌道を考慮する ★★★
+                            float baseStartX = this.startRotationX; // デフォルト
+                            if (this.fixedTrajectory && this.fixedRotationStartXArray != null && this.fixedRotationStartXArray.Length > i)
+                            {
+                                baseStartX = this.fixedRotationStartXArray[i]; // 軌道固定時
+                            }
+                            // ★★★ 修正ここまで ★★★
+
+                            float startXOffset = this.startRotationXArray[g] - baseStartX; // ランダム始点と「ベース始点」の差
+                            baseEnd += startXOffset;
+                        }
+
+                        // 3. EndX のランダム範囲の適用
+                        float randomOffset = (float)staticRng.NextDouble() * this.randomEndRotXRange - (this.randomEndRotXRange / 2.0f);
+                        this.targetRotationXArray[g] = baseEnd + randomOffset;
+                    }
+
+
                     // --- Rotation Y軸の配列計算 ---
-                    int numberOfGroupsRotY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotCount));
+                    int numberOfGroupsRotY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotYCount));
                     this.startRotationYArray = new float[numberOfGroupsRotY];
                     this.targetRotationYArray = new float[numberOfGroupsRotY];
 
                     for (int g = 0; g < numberOfGroupsRotY; g++)
                     {
-                        int i = g * Math.Max(1, this.randomRotCount);
+                        // ★★★ グループgの代表インデックスiを計算 ★★★
+                        int i = g * Math.Max(1, this.randomRotYCount);
 
-                        float startYOffset = (float)staticRng!.NextDouble() * this.randomStartRotRange - (this.randomStartRotRange / 2.0f);
-                        this.startRotationYArray[g] = this.startRotationY + startYOffset;
+                        // ★★★ ベースとなる始点を決定 ★★★
+                        float baseStartY = this.startRotationY; // デフォルトは現在の始点
+                        if (this.fixedTrajectory && this.fixedRotationStartYArray != null && this.fixedRotationStartYArray.Length > i)
+                        {
+                            baseStartY = this.fixedRotationStartYArray[i]; // 軌道固定時は、射出時の始点
+                        }
 
-                        float baseEnd = this.endRotationY;
+                        float randomOffset = (float)staticRng.NextDouble() * this.randomStartRotYRange - (this.randomStartRotYRange / 2.0f);
+                        // ★★★ ベース始点(baseStartY)に対してオフセットをかける ★★★
+                        this.startRotationYArray[g] = baseStartY + randomOffset;
+                    }
+                    for (int g = 0; g < numberOfGroupsY; g++)
+                    {
+                        int i = g * Math.Max(1, this.randomRotYCount);
+
+                        // 1. ベースとなる終点(baseEnd)を決定
+                        float baseEnd = this.endRotationY; // デフォルトは現在の終点
                         if (this.fixedTrajectory && this.fixedRotationEndYArray != null && this.fixedRotationEndYArray.Length > i)
                         {
-                            baseEnd = this.fixedRotationEndYArray[i];
+                            baseEnd = this.fixedRotationEndYArray[i]; // 軌道固定時は、射出時の終点
                         }
 
-                        if (this.randomSERotToggle && this.startRotationYArray != null && this.startRotationYArray.Length > g)
+                        // 2. Random SEToggleY によるオフセットの適用
+                        if (this.randomSERotYToggle && this.startRotationYArray != null && this.startRotationYArray.Length > g)
                         {
-                            float startOffset = this.startRotationYArray[g] - this.startRotationY;
-                            baseEnd += startOffset;
+                            // ★★★ ベースとなる始点も固定軌道を考慮する ★★★
+                            float baseStartY = this.startRotationY; // デフォルト
+                            if (this.fixedTrajectory && this.fixedRotationStartYArray != null && this.fixedRotationStartYArray.Length > i)
+                            {
+                                baseStartY = this.fixedRotationStartYArray[i]; // 軌道固定時
+                            }
+                            // ★★★ 修正ここまで ★★★
+
+                            float startYOffset = this.startRotationYArray[g] - baseStartY; // ランダム始点と「ベース始点」の差
+                            baseEnd += startYOffset;
                         }
 
-                        float endYOffset = (float)staticRng.NextDouble() * this.randomEndRotRange - (this.randomEndRotRange / 2.0f);
-                        this.targetRotationYArray[g] = baseEnd + endYOffset;
+                        // 3. EndY のランダム範囲の適用
+                        float randomOffset = (float)staticRng.NextDouble() * this.randomEndRotYRange - (this.randomEndRotYRange / 2.0f);
+                        this.targetRotationYArray[g] = baseEnd + randomOffset;
                     }
 
                     // --- Rotation Z軸の配列計算 ---
-                    int numberOfGroupsRotZ = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotCount));
+                    int numberOfGroupsRotZ = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotZCount));
                     this.startRotationZArray = new float[numberOfGroupsRotZ];
                     this.targetRotationZArray = new float[numberOfGroupsRotZ];
 
                     for (int g = 0; g < numberOfGroupsRotZ; g++)
                     {
-                        int i = g * Math.Max(1, this.randomRotCount);
+                        // ★★★ グループgの代表インデックスiを計算 ★★★
+                        int i = g * Math.Max(1, this.randomRotZCount);
 
-                        float startZOffset = (float)staticRng!.NextDouble() * this.randomStartRotRange - (this.randomStartRotRange / 2.0f);
-                        this.startRotationZArray[g] = this.startRotationZ + startZOffset;
+                        // ★★★ ベースとなる始点を決定 ★★★
+                        float baseStartZ = this.startRotationZ; // デフォルトは現在の始点
+                        if (this.fixedTrajectory && this.fixedRotationStartZArray != null && this.fixedRotationStartZArray.Length > i)
+                        {
+                            baseStartZ = this.fixedRotationStartZArray[i]; // 軌道固定時は、射出時の始点
+                        }
 
-                        float baseEnd = this.endRotationZ;
+                        float randomOffset = (float)staticRng.NextDouble() * this.randomStartRotZRange - (this.randomStartRotZRange / 2.0f);
+                        // ★★★ ベース始点(baseStartZ)に対してオフセットをかける ★★★
+                        this.startRotationZArray[g] = baseStartZ + randomOffset;
+                    }
+                    for (int g = 0; g < numberOfGroupsZ; g++)
+                    {
+                        int i = g * Math.Max(1, this.randomRotZCount);
+
+                        // 1. ベースとなる終点(baseEnd)を決定
+                        float baseEnd = this.endRotationZ; // デフォルトは現在の終点
                         if (this.fixedTrajectory && this.fixedRotationEndZArray != null && this.fixedRotationEndZArray.Length > i)
                         {
-                            baseEnd = this.fixedRotationEndZArray[i];
+                            baseEnd = this.fixedRotationEndZArray[i]; // 軌道固定時は、射出時の終点
                         }
 
-                        if (this.randomSERotToggle && this.startRotationZArray != null && this.startRotationZArray.Length > g)
+                        // 2. Random SEToggleZ によるオフセットの適用
+                        if (this.randomSERotZToggle && this.startRotationZArray != null && this.startRotationZArray.Length > g)
                         {
-                            float startOffset = this.startRotationZArray[g] - this.startRotationZ;
-                            baseEnd += startOffset;
+                            // ★★★ ベースとなる始点も固定軌道を考慮する ★★★
+                            float baseStartZ = this.startRotationZ; // デフォルト
+                            if (this.fixedTrajectory && this.fixedRotationStartZArray != null && this.fixedRotationStartZArray.Length > i)
+                            {
+                                baseStartZ = this.fixedRotationStartZArray[i]; // 軌道固定時
+                            }
+                            // ★★★ 修正ここまで ★★★
+
+                            float startZOffset = this.startRotationZArray[g] - baseStartZ; // ランダム始点と「ベース始点」の差
+                            baseEnd += startZOffset;
                         }
 
-                        float endZOffset = (float)staticRng.NextDouble() * this.randomEndRotRange - (this.randomEndRotRange / 2.0f);
-                        this.targetRotationZArray[g] = baseEnd + endZOffset;
+                        // 3. EndZ のランダム範囲の適用
+                        float randomOffset = (float)staticRng.NextDouble() * this.randomEndRotZRange - (this.randomEndRotZRange / 2.0f);
+                        this.targetRotationZArray[g] = baseEnd + randomOffset;
                     }
                     //Opacity
+                    /*
                     int numberOfGroupsOpacity = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomOpacityCount));
                     this.startOpacityArray = new float[numberOfGroupsOpacity];
                     this.targetOpacityArray = new float[numberOfGroupsOpacity];
 
                     for (int g = 0; g < numberOfGroupsOpacity; g++)
                     {
-                        /*
+                        ///*
                         int i = g * Math.Max(1, this.randomOpacityCount);
 
                         // 1. 始点のランダム値計算
                         float startOffset = (float)staticRng!.NextDouble() * this.randomStartOpacityRange - (this.randomStartOpacityRange / 2.0f);
                         // this.startopacity は OpacityStart のアニメーション値
                         this.startOpacityArray[g] = this.startopacity + startOffset;
-                        */
+                        *//*
+                        
                         int i = g * Math.Max(1, this.randomOpacityCount);
 
                         // 1. 始点のランダム値計算（ご要望の Min/Max Range 間でのランダム）
-                        float rangeA = this.randomStartOpacityRange;
-                        float rangeB = this.randomEndOpacityRange;
+                        float rangeA = this.randomStartOpacityRange / 100.0f;
+                        float rangeB = this.randomEndOpacityRange / 100.0f;
 
                         // 最小値と最大値を決定
                         float minVal = Math.Min(rangeA, rangeB);
@@ -723,7 +968,39 @@ namespace Particles3D
                         float endOffset = (float)staticRng.NextDouble() * this.randomEndOpacityRange - (this.randomEndOpacityRange / 2.0f);
                         this.targetOpacityArray[g] = baseEnd + endOffset;
                     }
+                    */
+                    //Opacity
+                    int numberOfGroupsOpacity = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomOpacityCount));
+                    this.startOpacityArray = new float[numberOfGroupsOpacity];
+                    this.targetOpacityArray = new float[numberOfGroupsOpacity];
+
+                    for (int g = 0; g < numberOfGroupsOpacity; g++)
+                    {
+                        // ★★★ ここから修正 ★★★
+
+                        // 1. 最小値・最大値を取得 (0-100スケール)
+                        //    ※入力が 1-100 とのことですが、0-100 の間違いとして進めます
+                        float minVal = Math.Min(this.randomStartOpacityRange, this.randomEndOpacityRange);
+                        float maxVal = Math.Max(this.randomStartOpacityRange, this.randomEndOpacityRange);
+
+                        // 2. 乱数を 0.0-1.0 で取得
+                        float randomFactor = (float)staticRng!.NextDouble();
+
+                        // 3. 最小値と最大値の間で線形補間 (0-100スケール)
+                        float randomOpacity = minVal + (maxVal - minVal) * randomFactor;
+
+                        // 4. 始点と終点の両方に、この固定ランダム値を設定
+                        //    これで progress によらず不透明度が固定されます。
+                        this.startOpacityArray[g] = randomOpacity;
+                        this.targetOpacityArray[g] = randomOpacity;
+
+                        // ★★★ 修正ここまで ★★★
+                        // (元の baseEnd や SEToggle や endOffset の計算は不要なので削除)
+                    }
                 }
+
+
+
                 //---random関連終了---
 
 
@@ -760,7 +1037,6 @@ namespace Particles3D
 
                     if (this.frame < T_start || this.frame > T_end)
                     {
-                        // 今回は return で高速化します。
                         return;
                     }
                     float progress = (this.frame - T_start) / this.travelTime;
@@ -769,16 +1045,15 @@ namespace Particles3D
                     {
                         float curveFactor = this.curveFactorArray[i];
 
-                        // ★ progress をランダムな係数で調整
                         progress = progress * curveFactor;
 
                     }
 
-                    progress = Math.Min(1.0f, Math.Max(0.0f, progress)); // 念のため 0.0～1.0 にクランプ
+                    progress = Math.Min(1.0f, Math.Max(0.0f, progress));
 
-                    float PositionX_progress = progress; // 例: X座標の進行度に適用
-                    float PositionY_progress = progress; // 例: X座標の進行度に適用
-                    float PositionZ_progress = progress; // 例: X座標の進行度に適用
+                    float PositionX_progress = progress;
+                    float PositionY_progress = progress;
+                    float PositionZ_progress = progress;
 
                     float RotationX_progress = progress;
                     float RotationY_progress = progress;
@@ -795,6 +1070,15 @@ namespace Particles3D
 
 
                     //---軌道固定系統---
+                    float current_startx = this.startx;
+                    float current_starty = this.starty;
+                    float current_startz = this.startz;
+                    if (this.fixedTrajectory && this.fixedPositionStartXArray != null && this.fixedPositionStartXArray.Length > i)
+                        current_startx = this.fixedPositionStartXArray[i];
+                    if (this.fixedTrajectory && this.fixedPositionStartYArray != null && this.fixedPositionStartYArray.Length > i)
+                        current_starty = this.fixedPositionStartYArray[i];
+                    if (this.fixedTrajectory && this.fixedPositionStartZArray != null && this.fixedPositionStartZArray.Length > i)
+                        current_startz = this.fixedPositionStartZArray[i];
 
                     float current_endx = this.endx;
                     if (this.fixedTrajectory && this.fixedPositionEndXArray != null && this.fixedPositionEndXArray.Length > i)
@@ -845,6 +1129,21 @@ namespace Particles3D
                     }
 
                     // ★ 回転固定値の決定
+                    float current_startRotationX = this.startRotationX;
+                    if (this.fixedTrajectory && this.fixedRotationStartXArray != null && this.fixedRotationStartXArray.Length > i)
+                    {
+                        current_startRotationX = this.fixedRotationStartXArray[i];
+                    }
+                    float current_startRotationY = this.startRotationY;
+                    if (this.fixedTrajectory && this.fixedRotationStartYArray != null && this.fixedRotationStartYArray.Length > i)
+                    {
+                        current_startRotationY = this.fixedRotationStartYArray[i];
+                    }
+                    float current_startRotationZ = this.startRotationZ;
+                    if (this.fixedTrajectory && this.fixedRotationStartZArray != null && this.fixedRotationStartZArray.Length > i)
+                    {
+                        current_startRotationZ = this.fixedRotationStartZArray[i];
+                    }
                     float current_endRotationX = this.endRotationX;
                     if (this.fixedTrajectory && this.fixedRotationEndXArray != null && this.fixedRotationEndXArray.Length > i)
                     {
@@ -874,6 +1173,7 @@ namespace Particles3D
                     float currentx_base = 0f;
                     float currenty_base = 0f;
                     float currentz_base = 0f;
+                    // X座標の計算
                     if (this.randomToggleX && targetXArray != null && startXArray != null && targetXArray.Length > 0 && startXArray.Length > 0)
                     {
                         int safeRandomXCount = Math.Max(1, this.randomXCount);
@@ -893,7 +1193,7 @@ namespace Particles3D
                     else
                     {
                         // ランダム無効時（以前のロジック）
-                        currentx_base = startx + (current_endx - startx) * PositionX_progress;
+                        currentx_base = current_startx + (current_endx - current_startx) * PositionX_progress;
                     }
 
                     // ★Y座標の計算を追加
@@ -916,7 +1216,7 @@ namespace Particles3D
                     else
                     {
                         // ランダム無効時（以前のロジック）
-                        currenty_base = starty + (current_endy - starty) * PositionY_progress; // ★ current_endy を使用
+                        currenty_base = current_starty + (current_endy - current_starty) * PositionY_progress;
                     }
 
 
@@ -940,7 +1240,7 @@ namespace Particles3D
                     else
                     {
                         // ランダム無効時（以前のロジック）
-                        currentz_base = startz + (current_endz - startz) * PositionZ_progress; // ★ current_endz を使用
+                        currentz_base = current_startz + (current_endz - current_startz) * PositionZ_progress;
                     }
 
                     // ★ スケール X軸の計算
@@ -1015,10 +1315,12 @@ namespace Particles3D
                         }
                         finalScalez = this.scalez + (current_scalez_end - this.scalez) * ScaleZ_progress;
                     }
+
+                    // --- Rotation X軸の計算 ---
                     float finalRotX;
-                    if (this.randomRotToggle && targetRotationXArray != null && startRotationXArray != null && targetRotationXArray.Length > 0 && startRotationXArray.Length > 0)
+                    if (this.randomRotXToggle && targetRotationXArray != null && startRotationXArray != null && targetRotationXArray.Length > 0 && startRotationXArray.Length > 0)
                     {
-                        int safeCount = Math.Max(1, this.randomRotCount);
+                        int safeCount = Math.Max(1, this.randomRotXCount);
                         int groupIndex = i / safeCount;
                         int targetIndex = Math.Min(groupIndex, targetRotationXArray.Length - 1);
 
@@ -1035,15 +1337,15 @@ namespace Particles3D
                         {
                             current_endRotationX = this.fixedRotationEndXArray[i];
                         }
-                        finalRotX = this.startRotationX + (current_endRotationX - this.startRotationX) * RotationX_progress;
+                        finalRotX = current_startRotationX + (current_endRotationX - current_startRotationX) * RotationX_progress;
                     }
 
                     // --- Rotation Y軸の計算 ---
                     float finalRotY;
                     // Y軸のランダム計算ロジック...（X軸とほぼ同じ）
-                    if (this.randomRotToggle && targetRotationYArray != null && startRotationYArray != null && targetRotationYArray.Length > 0 && startRotationYArray.Length > 0)
+                    if (this.randomRotYToggle && targetRotationYArray != null && startRotationYArray != null && targetRotationYArray.Length > 0 && startRotationYArray.Length > 0)
                     {
-                        int safeCount = Math.Max(1, this.randomRotCount);
+                        int safeCount = Math.Max(1, this.randomRotYCount);
                         int groupIndex = i / safeCount;
                         int targetIndex = Math.Min(groupIndex, targetRotationYArray.Length - 1);
 
@@ -1059,15 +1361,15 @@ namespace Particles3D
                         {
                             current_endRotationY = this.fixedRotationEndYArray[i];
                         }
-                        finalRotY = this.startRotationY + (current_endRotationY - this.startRotationY) * RotationY_progress;
+                        finalRotY = current_startRotationY + (current_endRotationY - current_startRotationY) * RotationY_progress;
                     }
 
                     // --- Rotation Z軸の計算 ---
                     float finalRotZ;
                     // Z軸のランダム計算ロジック...（X軸とほぼ同じ）
-                    if (this.randomRotToggle && targetRotationZArray != null && startRotationZArray != null && targetRotationZArray.Length > 0 && startRotationZArray.Length > 0)
+                    if (this.randomRotZToggle && targetRotationZArray != null && startRotationZArray != null && targetRotationZArray.Length > 0 && startRotationZArray.Length > 0)
                     {
-                        int safeCount = Math.Max(1, this.randomRotCount);
+                        int safeCount = Math.Max(1, this.randomRotZCount);
                         int groupIndex = i / safeCount;
                         int targetIndex = Math.Min(groupIndex, targetRotationZArray.Length - 1);
 
@@ -1083,7 +1385,7 @@ namespace Particles3D
                         {
                             current_endRotationZ = this.fixedRotationEndZArray[i];
                         }
-                        finalRotZ = this.startRotationZ + (current_endRotationZ - this.startRotationZ) * RotationZ_progress;
+                        finalRotZ = current_startRotationZ + (current_endRotationZ - current_startRotationZ) * RotationZ_progress;
                     }
                     float finalOpacity;
                     // 判定に this.count > i を含め、配列の長さを確認
@@ -1113,18 +1415,24 @@ namespace Particles3D
                     }
                     //---random関連終了---
 
-                    float currentOpacity = (startopacity / 100.0f) + ((finalOpacity / 100.0f) - (startopacity / 100.0f)) * Opacity_progress;
+                    //float currentOpacity = (startopacity / 100.0f) + ((finalOpacity / 100.0f) - (startopacity / 100.0f)) * Opacity_progress;
+                    float currentOpacity = finalOpacity / 100.0f;
 
                     using var opacityEffect = new Opacity(dc);
                     opacityEffect.SetInput(0, input, true);
-                    opacityEffect.SetValue((int)OpacityProperties.Opacity, currentOpacity);
+                    opacityEffect.SetValue((int)OpacityProperties.Opacity, Math.Clamp(currentOpacity, 0.0f, 1.0f));
+                    using var opacityOutput = opacityEffect.Output;
 
                     using var renderEffect = new Transform3D(dc);
 
-                    renderEffect.SetInput(0, opacityEffect.Output, true);
+                    renderEffect.SetInput(0, opacityOutput, true);
 
                     //---Gravity---
-                    float progressSquared = (progress * progress - progress);
+                    float progressSquared = progress * progress;
+                    if (grTerminationToggle)
+                    {
+                        progressSquared = (progress * progress - progress);
+                    }
 
                     float gravityOffsetX = current_gravityX * progressSquared;
                     float gravityOffsetY = current_gravityY * progressSquared;
@@ -1182,7 +1490,9 @@ namespace Particles3D
                                                    effectDescription.DrawDescription.Camera *
                                                    new Matrix4x4(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, -0.001f, 0f, 0f, 0f, 1f);
 
-                    dc.DrawImage(renderEffect.Output);
+                    using var renderOutput = renderEffect.Output;
+
+                    dc.DrawImage(renderOutput);
 
                 }
 
@@ -1237,8 +1547,10 @@ namespace Particles3D
                 }
                 */
 
-                List<ItemDrawData> drawList = new List<ItemDrawData>();
+                //List<ItemDrawData> drawList = new List<ItemDrawData>();
 
+                this._drawList.Clear();
+                /*
                 // 全アイテムの Z 座標を計算し、リストに追加
                 for (int i = 0; i < this.count; i++)
                 {
@@ -1252,6 +1564,21 @@ namespace Particles3D
                         drawList.Add(new ItemDrawData { Index = i, ZPosition = currentz });
                     }
                 }
+                */
+                for (int i = 0; i < this.count; i++)
+                {
+                    bool isActive;
+                    // CalculateCurrentZ を呼び出し、現在の Z 座標とアクティブ状態を取得
+                    float currentz = CalculateCurrentZ(i, out isActive);
+
+                    if (isActive)
+                    {
+                        // 描画期間内のアイテムのみリストに追加
+                        // drawList の代わりに _drawList を使用
+                        this._drawList.Add(new ItemDrawData { Index = i, ZPosition = currentz });
+                    }
+                }
+                /*
                 drawList.Sort((a, b) => {
                     // 1. ZPosition の比較 (主キー)
                     int zComparison = a.ZPosition.CompareTo(b.ZPosition);
@@ -1268,7 +1595,23 @@ namespace Particles3D
                         return a.Index.CompareTo(b.Index);
                     }
                 });
+                */
+                _drawList.Sort((a, b) => {
+                    // 1. ZPosition の比較 (主キー)
+                    int zComparison = a.ZPosition.CompareTo(b.ZPosition);
 
+                    if (zComparison != 0)
+                    {
+                        // Z座標が異なる場合、そのまま Z 座標で順序を決定
+                        return zComparison;
+                    }
+                    else
+                    {
+                        // Z座標が完全に同じ場合、元のインデックス (Index) を使用して順序を決定 (副キー)
+                        // インデックスが小さいものから描画することで、安定した順序を保証
+                        return a.Index.CompareTo(b.Index);
+                    }
+                });
 
                 // カメラ行列 (例: effectDescription.DrawDescription.Camera)
                 Matrix4x4 cam = effectDescription.DrawDescription.Camera;
@@ -1276,7 +1619,7 @@ namespace Particles3D
                 // C#の多くのライブラリでは、これが第4行の (X, Y, Z) 成分に対応します
                 Vector3 camPosition = new Vector3(cam.M41, cam.M42, cam.M43);
 
-                Vector3 itemPosition = new Vector3(0, 0, 0);
+                Vector3 itemPosition = new Vector3(this.startx, this.starty, this.startz);
                 // アイテムからカメラへ向かうベクトル
                 Vector3 viewVector = camPosition - itemPosition;
                 viewVector = Vector3.Normalize(viewVector); // 正規化（長さ 1 にする）
@@ -1288,7 +1631,7 @@ namespace Particles3D
                 // カメラの向きが正面(+Z)に対してどれくらい回転しているか
                 float angleY = (float)Math.Atan2(camForward.X, camForward.Z);
 
-
+                /*
                 if (!this.fixedDraw)
                 {
                     // 180度以上回転していたら描画順を反転
@@ -1303,8 +1646,8 @@ namespace Particles3D
                     // dotProduct が負 (-): 視線ベクトルとカメラの Z 軸が反対方向を向いている (裏側)
                     // ----------------------------------------------------------------------
                 }
-
-
+                
+                
                 if (this.reverseDraw >= 0.5f) // または this.reverseDraw == true など
                 {
                     drawList.Reverse();
@@ -1314,7 +1657,32 @@ namespace Particles3D
                     // data.Index は、元のアイテムのインデックス i に相当します
                     draw(data.Index);
                 }
+                */
+                if (!this.fixedDraw)
+                {
+                    // 180度以上回転していたら描画順を反転
+                    if (Math.Abs(angleY) > Math.PI / 2)
+                    {
+                        _drawList.Reverse();
+                    }
 
+                    // アイテムの「正面」は通常、ワールド座標の +Z 軸方向と仮定します。
+                    // ----------------------------------------------------------------------
+                    // dotProduct が正 (+): 視線ベクトルとカメラの Z 軸が同じ方向を向いている
+                    // dotProduct が負 (-): 視線ベクトルとカメラの Z 軸が反対方向を向いている (裏側)
+                    // ----------------------------------------------------------------------
+                }
+
+
+                if (this.reverseDraw >= 0.5f) // または this.reverseDraw == true など
+                {
+                    _drawList.Reverse();
+                }
+                foreach (var data in _drawList)
+                {
+                    // data.Index は、元のアイテムのインデックス i に相当します
+                    draw(data.Index);
+                }
 
                 dc.EndDraw();
                 dc.Target = null;
@@ -1368,6 +1736,10 @@ namespace Particles3D
 
             }
 
+            float current_startz = this.startz;
+            if (this.fixedTrajectory && this.fixedPositionStartZArray != null && this.fixedPositionStartZArray.Length > i)
+                current_startz = this.fixedPositionStartZArray[i];
+
             float current_endz = this.endz;
             if (this.fixedTrajectory && this.fixedPositionEndZArray != null && this.fixedPositionEndZArray.Length > i)
             {
@@ -1380,6 +1752,7 @@ namespace Particles3D
 
             // 2. Z座標関連の計算（★ currentz_base と current_gravityZ の決定ロジックを移植 ★）
             // ★Z座標の計算を追加
+
             float currentz_base = 0f;
             if (this.randomToggleZ && targetZArray != null && startZArray != null && targetZArray.Length > 0 && startZArray.Length > 0)
             {
@@ -1400,7 +1773,7 @@ namespace Particles3D
             else
             {
                 // ランダム無効時（以前のロジック）
-                currentz_base = startz + (current_endz - startz) * PositionZ_progress; // ★ current_endz を使用
+                currentz_base = current_startz + (current_endz - current_startz) * PositionZ_progress;
             }
 
             float current_gravityZ = this.gravityZ;
@@ -1412,7 +1785,12 @@ namespace Particles3D
             // ★★★★ ここで if を閉じる ★★★★
 
             // 3. 重力オフセットの計算 (if の外で、必ず実行される)
-            float progressSquared = (progress * progress - progress);
+            float progressSquared = progress * progress;
+            if (grTerminationToggle)
+            {
+                progressSquared = (progress * progress - progress);
+            }
+
             float gravityOffsetZ = current_gravityZ * progressSquared;
 
             // 4. 最終Z座標の決定 (if の外で、必ず実行される)
@@ -1425,7 +1803,18 @@ namespace Particles3D
 
         public void Dispose()
         {
+            // 1. disposerによる解放処理（内部リソースをクリーンアップ）
             disposer.Dispose();
+
+            // 2. ★追加: CommandListを明示的に解放 (disposerで解放されていなければここで解放)
+            if (commandList != null && commandList is IDisposable disposableCommandList)
+            {
+                disposableCommandList.Dispose();
+            }
+            this.commandList = null;
+
+            this.input = null; // 参照を切る
+
         }
 
         public void SetInput(ID2D1Image? input)
