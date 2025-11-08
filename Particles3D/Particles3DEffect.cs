@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using Particles3D;
+using System.Windows.Media;
 using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Controls;
 using YukkuriMovieMaker.Exo;
@@ -33,10 +33,28 @@ namespace Particles3D
         public bool FixedDraw { get => fixedDraw; set => Set(ref fixedDraw, value); }
         bool fixedDraw = false;
 
-        [Display(GroupName = "描画", Name = "ビルボード化", Description = "ビルボード化")]
+        [Display(GroupName = "描画", Name = "Y軸ビルボード化", Description = "Y軸のみビルボード化します。横から見ても一様に見えるものです。上から見ると様子が変わります。")]
         [ToggleSlider]
         public bool BillboardDraw { get => billboardDraw; set => Set(ref billboardDraw, value); }
         bool billboardDraw = false;
+        /*
+        [Display(GroupName = "描画", Name = "XY軸ビルボード化", Description = "X、Y軸のみビルボード化します。横、上から見ても一様に見えるものです。")]
+        [ToggleSlider]
+        public bool BillboardXYDraw { get => billboardXYDraw; set => Set(ref billboardXYDraw, value); }
+        bool billboardXYDraw = false;
+        */
+        [Display(GroupName = "描画", Name = "XYZ軸ビルボード化", Description = "すべての軸でビルボード化します。横、上、傾きから見ても一様に見えるものです。")]
+        [ToggleSlider]
+        public bool BillboardXYZDraw { get => billboardXYZDraw; set => Set(ref billboardXYZDraw, value); }
+        bool billboardXYZDraw = false;
+        [Display(GroupName = "描画", Name = "進行方向を向く", Description = "オブジェクトが移動する方向を自動的に向くようになります。")]
+        [ToggleSlider]
+        public bool AutoOrient { get => autoOrient; set => Set(ref autoOrient, value); }
+        private bool autoOrient = false;
+        [Display(GroupName = "描画", Name = "進行方向2D化", Description = "2D用になります。「進行方向を向く」が有効になっていないと動きません。")]
+        [ToggleSlider]
+        public bool AutoOrient2D { get => autoOrient2D; set => Set(ref autoOrient2D, value); }
+        private bool autoOrient2D = false;
 
         [Display(GroupName = "遅延", Name = "遅延", Description = "遅延")]
         [AnimationSlider("F1", "ﾐﾘ秒", 0, 1000)]
@@ -78,6 +96,18 @@ namespace Particles3D
         public bool PSEToggleZ { get => pSEToggleZ; set => Set(ref pSEToggleZ, value); }
         bool pSEToggleZ = false;
 
+
+        [Display(GroupName = "拡大率", Name = "初期X拡大率", Description = "初期X拡大率")]
+        [AnimationSlider("F1", "％", 0, 100)]
+        public Animation ScaleStartX { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
+
+        [Display(GroupName = "拡大率", Name = "初期Y拡大率", Description = "初期Y拡大率")]
+        [AnimationSlider("F1", "％", 0, 100)]
+        public Animation ScaleStartY { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
+
+        [Display(GroupName = "拡大率", Name = "初期Z拡大率", Description = "初期拡大率")]
+        [AnimationSlider("F1", "％", 0, 100)]
+        public Animation ScaleStartZ { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
         [Display(GroupName = "拡大率", Name = "終端X拡大率", Description = "終端X拡大率")]
         [AnimationSlider("F1", "％", 0, 100)]
         public Animation ScaleX { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
@@ -90,13 +120,13 @@ namespace Particles3D
         [AnimationSlider("F1", "％", 0, 100)]
         public Animation ScaleZ { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
 
-        [Display(GroupName = "透明度", Name = "初期不透明度", Description = "初期不透明度")]
+        [Display(GroupName = "透明度", Name = "初期不透明度", Description = "初期不透明度、通常時は0 ～ 100％、ランダム有効化した際にのみ、100000％まで設定可能です。")]
         [AnimationSlider("F1", "％", 0, 100)]
-        public Animation StartOpacity { get; } = new Animation(100, 0, 100);
+        public Animation StartOpacity { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
 
-        [Display(GroupName = "透明度", Name = "終端不透明度", Description = "終端不透明度")]
+        [Display(GroupName = "透明度", Name = "終端不透明度", Description = "終端不透明度、通常時は0 ～ 100％、ランダム有効化した際にのみ、100000％まで設定可能です。")]
         [AnimationSlider("F1", "％", 0, 100)]
-        public Animation EndOpacity { get; } = new Animation(100, 0, 100);
+        public Animation EndOpacity { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
 
         [Display(GroupName = "角度", Name = "初期X回転", Description = "初期X回転")]
         [AnimationSlider("F1", "°", -360, 360)]
@@ -278,8 +308,7 @@ namespace Particles3D
         public Animation RandomStartOpacityRange { get; } = new Animation(0, 0, 100);
         [Display(GroupName = "ランダム", Name = "終端不透明度", Description = "終端不透明度")]
         [AnimationSlider("F1", "％", 0, 100)]
-        public Animation RandomEndOpacityRange { get; } = new Animation(0, 0, 100);
-
+        public Animation RandomEndOpacityRange { get; } = new Animation(100, 0, 100);
 
 
 
@@ -323,6 +352,35 @@ namespace Particles3D
         public bool GrTerminationToggle { get => grTerminationToggle; set => Set(ref grTerminationToggle, value); }
         bool grTerminationToggle = true;
 
+
+        [Display(GroupName = "色", Name = "初期色", Description = "生成時の色を指定します。")]
+        [ColorPicker]
+        public Color StartColor { get => startColor; set => Set(ref startColor, value); }
+        private Color startColor = Colors.White;
+        [Display(GroupName = "色", Name = "終端色", Description = "消滅時の色を指定します。")]
+        [ColorPicker]
+        public Color EndColor { get => endColor; set => Set(ref endColor, value); }
+        private Color endColor = Colors.White;
+
+        [Display(GroupName = "ランダム色", Name = "色ランダム有効化", Description = "色ランダムを有効化します。非常に高負荷です。")]
+        [ToggleSlider]
+        public bool RandomColorToggle { get => randomColorToggle; set => Set(ref randomColorToggle, value); }
+        bool randomColorToggle = false;
+        [Display(GroupName = "ランダム色", Name = "周期色", Description = "周期色")]
+        [AnimationSlider("F0", "周期", 1, 10)]
+        public Animation RandomColorCount { get; } = new Animation(1, 1, 100);
+        [Display(GroupName = "ランダム色", Name = "ランダム色相(H)", Description = "色相(H)をランダムにずらす範囲。0-360。")]
+        [AnimationSlider("F1", "", 0, 360)]
+        public Animation RandomHueRange { get; } = new Animation(0, 0, 360);
+
+        [Display(GroupName = "ランダム色", Name = "ランダム彩度(S)", Description = "彩度(S)をランダムにずらす範囲。-100～100%。")]
+        [AnimationSlider("F1", "％", -100, 100)]
+        public Animation RandomSatRange { get; } = new Animation(0, -100, 100);
+
+        [Display(GroupName = "ランダム色", Name = "ランダム輝度(L)", Description = "輝度(L)をランダムにずらす範囲。-100～100%。")]
+        [AnimationSlider("F1", "％", -100, 100)]
+        public Animation RandomLumRange { get; } = new Animation(0, -100, 100);
+
         public override IEnumerable<string> CreateExoVideoFilters(int keyFrameIndex, ExoOutputDescription exoOutputDescription)
         {
             return [];
@@ -338,7 +396,7 @@ namespace Particles3D
             EndRotationX, EndRotationY, EndRotationZ, DelayTime,RandomXCount,RandomStartXRange,RandomEndXRange,RandomSeed,RandomYCount,RandomStartYRange,RandomEndYRange,RandomZCount,RandomStartZRange,RandomEndZRange,
             CycleTime, TravelTime, GravityX, GravityY, GravityZ, CurveRange,RandomScaleCount,RandomStartScaleRange,RandomEndScaleRange,
             RandomRotXCount,RandomStartRotXRange,RandomEndRotXRange,RandomRotYCount,RandomStartRotYRange,RandomEndRotYRange,RandomRotZCount,RandomStartRotZRange,RandomEndRotZRange,
-            RandomOpacityCount,RandomStartOpacityRange,RandomEndOpacityRange
+            RandomOpacityCount,RandomStartOpacityRange,RandomEndOpacityRange,ScaleStartX,ScaleStartY,ScaleStartZ,RandomHueRange,RandomSatRange, RandomLumRange,RandomColorCount
             ];
 
 
