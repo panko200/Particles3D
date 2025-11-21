@@ -1,7 +1,11 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
+using Particles3D;
 using Vortice.Direct2D1;
 using Vortice.Direct2D1.Effects;
 using Vortice.Mathematics;
@@ -11,46 +15,79 @@ using YukkuriMovieMaker.Commons;
 using YukkuriMovieMaker.Player.Video;
 
 //--Todo--
-//UIのメモリもうちょっと何とかしたいところはあるけど、しゃーない。(済)
 //初期と終端を同期するようにしたい。ただし、初期を動かすことで終端もつられて動く。しかし、終端は固定されることはない。(済)
 //不透明度もうちょっと直す。(済)
 //ScaleX,Y,Z同期設定を作る。(済)
 //回転をX,Y,Zわける。(済)
 //ScaleX,Y,Zの初期値作る(済)
 //ScaleのfixedStartArrayつくる(済)
-//上からみてもビルボードver作成(済)
+//XYZビルボードver作成(済)
 //ランダム不透明度を有効化した時に、不透明度の初期値終端値が機能しなくなるものの修正(ムズイかも)(済)
 
 //--いつかできたら--
 //回転を同期(長細いものを飛ばしたとき、常に同じ角度なのは違和感なので、飛んでいる方向に角度を変える。)(済)
-//floor機能(Glueだけでも)(AEの機能)
+//floor機能(Glueだけでも)(AEの機能)(済)
 //random HSL(射出されるときの色を、色相だけランダムにする、とか、彩度だけランダムにするとか切り替え可能に。)(RGBだと、色相だけでなく輝度や明度まで変わってしまって使いづらそう)(済)
 //この色からこの色へ変化(color picker)(優先度高)(現：乗算処理) (済)
-//回転時にその図形の中に納める(説明難しすぎ、優先度最低)
-//Z軸だけでなく、X軸Y軸にも描画ソート追加(これにより結構な精度で疑似3Dを表現できそうだが、それをどこ基準に変えるかによる問題点はありそう？)
-//X,Y,Zで力・方向を扱うのではなく、力の向きと強さで扱う。(これにより、四角形型の物理法則ではなく、円形の、実際の物理法則近づく。(スクショ2025-11-07参照))
+//Z軸だけでなく、X軸Y軸にも描画ソート追加(これにより結構な精度で疑似3Dを表現できそうだが、それをどこ基準に変えるかによる問題点はありそう？)(済)
+//X,Y,Zで力・方向を扱うのではなく、力の向きと強さで扱う。(これにより、四角形型の物理法則ではなく、円形の、実際の物理法則近づく。(スクショ2025-11-07参照))(済)
+//XYビルボードver作成
+//描画0fから一巡した状態にするToggle追加。(済)
+//カメラに近づくほど、ぼかしや不透明度が低くなる機能(ピントのような概念かな？)(済)
+//空気抵抗値をつける。(済)
+//中間不透明度(AEのOpacity MAPの簡易版として作りたい。)(パラメータ・中間不透明度・減加速度(0.0なら線形、0.7ぐらいならいい感じに最初はEaseOUT、最後はEaseINに、1.0なら瞬時に中間不透明度へ。))(済)
+//プリセット機能の追加(済)
+//残像エフェクト(済)
+//残像段々小さくする機能(済)
 namespace Particles3D
 {
+
+    internal class ParticleEffectNodes : IDisposable
+    {
+        public Vortice.Direct2D1.Effects.ColorMatrix colorEffect;
+        public Vortice.Direct2D1.Effects.Opacity opacityEffect;
+        public Vortice.Direct2D1.Effects.GaussianBlur blurEffect;
+        public Vortice.Direct2D1.Effects.Transform3D renderEffect;
+
+        // コンストラクタで、必要なエフェクトをすべて生成する
+        public ParticleEffectNodes(ID2D1DeviceContext dc)
+        {
+            colorEffect = new Vortice.Direct2D1.Effects.ColorMatrix(dc);
+            opacityEffect = new Opacity(dc);
+            blurEffect = new Vortice.Direct2D1.Effects.GaussianBlur(dc);
+            renderEffect = new Transform3D(dc);
+        }
+
+        // 破棄
+        public void Dispose()
+        {
+            colorEffect?.Dispose();
+            opacityEffect?.Dispose();
+            blurEffect?.Dispose();
+            renderEffect?.Dispose();
+        }
+    }
+
     internal class Particles3DEffectProcessor : IVideoEffectProcessor, IDisposable
     {
         DisposeCollector disposer = new();
 
         Random? staticRng;
-        float[]? targetXArray; // ★目標Xを格納する配列
-        float[]? startXArray;  // ★StartXのランダム始端値
-        float[]? targetYArray; // ★目標Yを格納する配列
-        float[]? startYArray;  // ★StartYのランダム始端値
-        float[]? targetZArray; // ★目標Zを格納する配列
-        float[]? startZArray;  // ★StartZのランダム始端値
+        float[]? targetXArray; // 目標Xを格納する配列
+        float[]? startXArray;  // StartXのランダム始端値
+        float[]? targetYArray; // 目標Yを格納する配列
+        float[]? startYArray;  // StartYのランダム始端値
+        float[]? targetZArray; // 目標Zを格納する配列
+        float[]? startZArray;  // StartZのランダム始端値
 
-        float[]? startScaleXArray;
+        float[]? startScaleXArray; // ...以下略
         float[]? targetScaleXArray;
         float[]? startScaleYArray;
         float[]? targetScaleYArray;
         float[]? startScaleZArray;
         float[]? targetScaleZArray;
 
-        // ★ Rotation (始点/終点) のランダム配列
+        // Rotation (始点/終点) のランダム配列
         float[]? startRotationXArray;
         float[]? targetRotationXArray;
         float[]? startRotationYArray;
@@ -58,7 +95,7 @@ namespace Particles3D
         float[]? startRotationZArray;
         float[]? targetRotationZArray;
 
-        // ★ Opacity (始点/終点) のランダム配列
+        // Opacity (始点/終点) のランダム配列
         float[]? startOpacityArray;
         float[]? targetOpacityArray;
 
@@ -69,12 +106,14 @@ namespace Particles3D
         float[]? fixedPositionEndXArray;    // 固定された EndX 値
         float[]? fixedPositionEndYArray;    // 固定された EndY 値
         float[]? fixedPositionEndZArray;    // 固定された EndZ 値
-        float[]? fixedScaleStartXArray;
+        float[]? fixedScaleStartXArray;     // ...以下略
         float[]? fixedScaleStartYArray;
         float[]? fixedScaleStartZArray;
         float[]? fixedScaleEndXArray;
         float[]? fixedScaleEndYArray;
         float[]? fixedScaleEndZArray;
+        float[]? fixedOpacityStartArray;
+        float[]? fixedOpacityMidArray;
         float[]? fixedOpacityEndArray;
         float[]? fixedRotationStartXArray;
         float[]? fixedRotationStartYArray;
@@ -90,6 +129,21 @@ namespace Particles3D
         float[]? randomSatOffsetArray;
         float[]? randomLumOffsetArray;
 
+        float[]? randomForcePitchArray;
+        float[]? randomForceYawArray;
+        float[]? randomForceRollArray;
+        float[]? randomForceVelocityArray;
+
+        float[]? fixedForcePitchArray;
+        float[]? fixedForceYawArray;
+        float[]? fixedForceRollArray;
+        float[]? fixedForceVelocityArray;
+
+        float[]? hitProgressArray;
+        Vector3[]? hitVelocityArray;
+
+
+
         // 事前計算したHLSLエフェクトを保存するリスト
         List<Particles3DHueCustomEffect> hueEffects = new();
 
@@ -99,6 +153,8 @@ namespace Particles3D
 
         ID2D1Image? input;
         ID2D1CommandList? commandList;
+
+        List<ParticleEffectNodes> trailEffectPool = new();
 
         bool isFirst = true;
         bool fixedDraw;
@@ -136,10 +192,30 @@ namespace Particles3D
         float randomHueRange, randomSatRange, randomLumRange;
         int randomColorCount;
         bool randomColorToggle;
+        int calculationType; // 0:終端値指定 1:力指定
+        float forcePitch, forceYaw, forceVelocity, forceRoll;
+        int fps;
+        float forceRandomPitch, forceRandomYaw, forceRandomRoll, forceRandomVelocity;
+        int forceRandomCount;
+        bool floorToggle;
+        float floorY, floorWaitTime, floorFadeTime;
+        bool zSortToggle;
+        int floorJudgementType; // 0:床上 1:床下
+        int floorActionType; // 0:接着 1:氷原 2;反射
+        bool focusToggle, focusFadeToggle;
+        float focusDepth, focusRange, focusMaxBlur, focusFadeMinOpacity, focusFallOffBlur;
+        float airResistance;
+        float bounceFactor, bounceEnergyLoss, bounceGravity;
+        int bounceCount;
+        bool loopToggle;
+        bool opacityMapToggle;
+        float opacityMapMidPoint, opacityMapEase;
+        float trailInterval, trailFade, trailScale;
+        int trailCount;
+        bool trailToggle;
 
         System.Windows.Media.Color startColor;
         System.Windows.Media.Color endColor;
-
 
         Vector3 rotation;
         Matrix4x4 camera;
@@ -156,6 +232,7 @@ namespace Particles3D
 
         public DrawDescription Update(EffectDescription effectDescription)
         {
+
             //いっぱい定義
             var frame = effectDescription.ItemPosition.Frame;
             var length = effectDescription.ItemDuration.Frame;
@@ -191,6 +268,9 @@ namespace Particles3D
 
             var startopacity = (float)item.StartOpacity.GetValue(frame, length, fps);
             var endopacity = (float)item.EndOpacity.GetValue(frame, length, fps);
+            var opacityMapToggle = item.OpacityMapToggle;
+            var opacityMapMidPoint = (float)item.OpacityMapMidPoint.GetValue(frame, length, fps);
+            var opacityMapEase = (float)item.OpacityMapEase.GetValue(frame, length, fps);
 
             var delaytime = (float)item.DelayTime.GetValue(frame, length, fps);
 
@@ -209,32 +289,11 @@ namespace Particles3D
             var randomZCount = (int)item.RandomZCount.GetValue(frame, length, fps);
             var randomStartZRange = (float)item.RandomStartZRange.GetValue(frame, length, fps);
             var randomEndZRange = (float)item.RandomEndZRange.GetValue(frame, length, fps);
-
-            var randomSeed = (int)item.RandomSeed.GetValue(frame, length, fps);
-
-            var rotation = effectDescription.DrawDescription.Rotation;
-            var camera = effectDescription.DrawDescription.Camera;
-
-            var cycleTime = (float)item.CycleTime.GetValue(frame, length, fps);
-            var travelTime = (float)item.TravelTime.GetValue(frame, length, fps);
-
-            float delayFramesPerItem = delaytime * fps / 1000.0f;
-
-            var gravityX = (float)item.GravityX.GetValue(frame, length, fps);
-            var gravityY = (float)item.GravityY.GetValue(frame, length, fps);
-            var gravityZ = (float)item.GravityZ.GetValue(frame, length, fps);
-
-            var curveRange = (float)item.CurveRange.GetValue(frame, length, fps);
-            var curveToggle = item.CurveToggle;
-
-            var fixedTrajectory = item.FixedTrajectory;
-
             var randomScaleToggle = item.RandomScaleToggle;
             var randomScaleCount = (int)item.RandomScaleCount.GetValue(frame, length, fps);
             var randomStartScaleRange = (float)item.RandomStartScaleRange.GetValue(frame, length, fps);
             var randomEndScaleRange = (float)item.RandomEndScaleRange.GetValue(frame, length, fps);
             var randomSEScaleToggle = item.RandomSEScaleToggle;
-
             var randomRotXToggle = item.RandomRotXToggle;
             var randomRotXCount = (int)item.RandomRotXCount.GetValue(frame, length, fps);
             var randomStartRotXRange = (float)item.RandomStartRotXRange.GetValue(frame, length, fps);
@@ -250,20 +309,36 @@ namespace Particles3D
             var randomStartRotZRange = (float)item.RandomStartRotZRange.GetValue(frame, length, fps);
             var randomEndRotZRange = (float)item.RandomEndRotZRange.GetValue(frame, length, fps);
             var randomSERotZToggle = item.RandomSERotZToggle;
-
             var randomOpacityToggle = item.RandomOpacityToggle;
             var randomOpacityCount = (int)item.RandomOpacityCount.GetValue(frame, length, fps);
             var randomStartOpacityRange = (float)item.RandomStartOpacityRange.GetValue(frame, length, fps);
             var randomEndOpacityRange = (float)item.RandomEndOpacityRange.GetValue(frame, length, fps);
             var randomSEOpacityToggle = item.RandomSEOpacityToggle;
 
+            var randomSyScaleToggle = item.RandomSyScaleToggle;
+            var randomSeed = (int)item.RandomSeed.GetValue(frame, length, fps);
+
+            var rotation = effectDescription.DrawDescription.Rotation;
+            var camera = effectDescription.DrawDescription.Camera;
+
+            var cycleTime = (float)item.CycleTime.GetValue(frame, length, fps);
+            var travelTime = (float)item.TravelTime.GetValue(frame, length, fps);
+
+            float delayFramesPerItem = delaytime * fps / 1000.0f;
+
+            var gravityX = (float)item.GravityX.GetValue(frame, length, fps);
+            var gravityY = (float)item.GravityY.GetValue(frame, length, fps);
+            var gravityZ = (float)item.GravityZ.GetValue(frame, length, fps);
+            var grTerminationToggle = item.GrTerminationToggle;
+
+            var curveRange = (float)item.CurveRange.GetValue(frame, length, fps);
+            var curveToggle = item.CurveToggle;
+
+            var fixedTrajectory = item.FixedTrajectory;
+
             var billboard = item.BillboardDraw;
             //var billboardXY = item.BillboardXYDraw;
             var billboardXYZ = item.BillboardXYZDraw;
-
-            var grTerminationToggle = item.GrTerminationToggle;
-
-            var randomSyScaleToggle = item.RandomSyScaleToggle;
 
             var pSEToggleX = item.PSEToggleX;
             var pSEToggleY = item.PSEToggleY;
@@ -280,6 +355,51 @@ namespace Particles3D
             var randomHueRange = (float)item.RandomHueRange.GetValue(frame, length, fps);
             var randomSatRange = (float)item.RandomSatRange.GetValue(frame, length, fps);
             var randomLumRange = (float)item.RandomLumRange.GetValue(frame, length, fps);
+
+            var calculationType = (int)item.CalculationType;
+
+            var forcePitch = (float)item.ForcePitch.GetValue(frame, length, fps);
+            var forceYaw = (float)item.ForceYaw.GetValue(frame, length, fps);
+            var forceRoll = (float)item.ForceRoll.GetValue(frame, length, fps);
+            var forceVelocity = (float)item.ForceVelocity.GetValue(frame, length, fps);
+            var forceRandomCount = (int)item.ForceRandomCount.GetValue(frame, length, fps);
+            var forceRandomPitch = (float)item.ForceRandomPitch.GetValue(frame, length, fps);
+            var forceRandomYaw = (float)item.ForceRandomYaw.GetValue(frame, length, fps);
+            var forceRandomRoll = (float)item.ForceRandomRoll.GetValue(frame, length, fps);
+            var forceRandomVelocity = (float)item.ForceRandomVelocity.GetValue(frame, length, fps);
+
+            var floorToggle = item.FloorToggle;
+            var floorY = (float)item.FloorY.GetValue(frame, length, fps);
+            var floorWaitTime = (float)item.FloorWaitTime.GetValue(frame, length, fps);
+            var floorFadeTime = (float)item.FloorFadeTime.GetValue(frame, length, fps);
+            var floorJudgementType = (int)item.FloorJudgementType;
+            var floorActionType = (int)item.FloorActionType;
+            var bounceFactor = (float)item.BounceFactor.GetValue(frame, length, fps);
+            var bounceEnergyLoss = (float)item.BounceEnergyLoss.GetValue(frame, length, fps);
+            var bounceGravity = (float)item.BounceGravity.GetValue(frame, length, fps);
+            var bounceCount = (int)item.BounceCount.GetValue(frame, length, fps);
+
+            var zSortToggle = item.ZSortToggle;
+
+            var focusToggle = item.FocusToggle;
+            var focusFadeToggle = item.FocusFadeToggle;
+            var focusDepth = (float)item.FocusDepth.GetValue(frame, length, fps);
+            var focusRange = (float)item.FocusRange.GetValue(frame, length, fps);
+            var focusMaxBlur = (float)item.FocusMaxBlur.GetValue(frame, length, fps);
+            var focusFadeMinOpacity = (float)item.FocusFadeMinOpacity.GetValue(frame, length, fps);
+            var focusFallOffBlur = (float)item.FocusFallOffBlur.GetValue(frame, length, fps);
+
+            var airResistance = (float)item.AirResistance.GetValue(frame, length, fps);
+
+            var loopToggle = item.LoopToggle;
+
+            var trailToggle = item.TrailToggle;
+            var trailCount = (int)item.TrailCount.GetValue(frame, length, fps);
+            var trailInterval = (float)item.TrailInterval.GetValue(frame, length, fps);
+            var trailFade = (float)item.TrailFade.GetValue(frame, length, fps);
+            var trailScale = (float)item.TrailScale.GetValue(frame, length, fps);
+
+
             //---random関連---
             // randomXCountが0だと0除算や計算がおかしくなるので、1以上に強制する
             int SafeRandomXCount = Math.Max(1, randomXCount);
@@ -306,9 +426,14 @@ namespace Particles3D
                 this.randomRotZCount != randomRotZCount || this.randomStartRotZRange != randomStartRotZRange || this.randomEndRotZRange != randomEndRotZRange || this.randomSERotZToggle != randomSERotZToggle ||
                 this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange || this.randomSEOpacityToggle != randomSEOpacityToggle ||
                 this.billboard != billboard || /*this.billboardXY != billboardXY ||*/ this.billboardXYZ != billboardXYZ || this.startx != startx || this.starty != starty || this.startz != startz ||
-                this.scaleStartx != scaleStartz || this.scaleStartx != scaleStartx || this.scaleStarty != scaleStarty ||
+                this.scaleStartz != scaleStartz || this.scaleStartx != scaleStartx || this.scaleStarty != scaleStarty ||
                 this.pSEToggleX != pSEToggleX || this.pSEToggleY != pSEToggleY || this.pSEToggleZ != pSEToggleZ || this.autoOrient != autoOrient || this.autoOrient2D != autoOrient2D ||
-                this.randomHueRange != randomHueRange || this.randomSatRange != randomSatRange || this.randomLumRange != randomLumRange || this.randomColorCount != randomColorCount || this.randomColorToggle != randomColorToggle;
+                this.randomHueRange != randomHueRange || this.randomSatRange != randomSatRange || this.randomLumRange != randomLumRange || this.randomColorCount != randomColorCount || this.randomColorToggle != randomColorToggle ||
+                this.calculationType != calculationType || this.forcePitch != forcePitch || this.forceYaw != forceYaw || this.forceVelocity != forceVelocity || this.forceRoll != forceRoll || this.fps != fps ||
+                this.forceRandomCount != forceRandomCount || this.forceRandomPitch != forceRandomPitch || this.forceRandomRoll != forceRandomRoll || this.forceRandomYaw != forceRandomYaw || this.forceRandomVelocity != forceRandomVelocity ||
+                this.floorActionType != floorActionType || this.floorJudgementType != floorJudgementType || this.floorToggle != floorToggle || this.floorY != floorY || this.floorWaitTime != floorWaitTime || this.floorFadeTime != floorFadeTime ||
+                this.zSortToggle != zSortToggle || this.airResistance != airResistance || this.bounceFactor != bounceFactor || this.bounceEnergyLoss != bounceEnergyLoss || this.bounceGravity != bounceGravity ||
+                this.loopToggle != loopToggle || this.opacityMapMidPoint != opacityMapMidPoint || this.opacityMapToggle != opacityMapToggle || this.opacityMapEase != opacityMapEase || this.bounceCount != bounceCount;
 
             //もしこれに該当しなかったら描画更新しない
             if (isFirst || IsInputChanged || this.frame != frame || this.count != count || this.startx != startx || this.starty != starty || this.startz != startz ||
@@ -332,12 +457,18 @@ namespace Particles3D
                 this.pSEToggleX != pSEToggleX || this.pSEToggleY != pSEToggleY || this.pSEToggleZ != pSEToggleZ || this.grTerminationToggle != grTerminationToggle ||
                 this.startColor != startColor || this.endColor != endColor || this.scaleStartx != scaleStartx || this.scaleStarty != scaleStarty || this.scaleStartz != scaleStartz ||
                 this.autoOrient != autoOrient || this.autoOrient2D != autoOrient2D || this.randomHueRange != randomHueRange || this.randomSatRange != randomSatRange || this.randomLumRange != randomLumRange ||
-                this.randomColorCount != randomColorCount || this.randomColorToggle != randomColorToggle
+                this.randomColorCount != randomColorCount || this.randomColorToggle != randomColorToggle || this.calculationType != calculationType || this.forcePitch != forcePitch || this.forceYaw != forceYaw || this.forceRoll != forceRoll || this.forceVelocity != forceVelocity ||
+                this.fps != fps || this.forceRandomCount != forceRandomCount || this.forceRandomPitch != forceRandomPitch || this.forceRandomRoll != forceRandomRoll || this.forceRandomYaw != forceRandomYaw || this.forceRandomVelocity != forceRandomVelocity ||
+                this.floorActionType != floorActionType || this.floorJudgementType != floorJudgementType || this.floorToggle != floorToggle || this.floorY != floorY || this.floorWaitTime != floorWaitTime || this.floorFadeTime != floorFadeTime ||
+                this.zSortToggle != zSortToggle || this.focusToggle != focusToggle || this.focusFadeToggle != focusFadeToggle || this.focusDepth != focusDepth || this.focusRange != focusRange || this.focusMaxBlur != focusMaxBlur || this.focusFadeMinOpacity != focusFadeMinOpacity ||
+                this.focusFallOffBlur != focusFallOffBlur || this.airResistance != airResistance || this.bounceFactor != bounceFactor || this.bounceEnergyLoss != bounceEnergyLoss || this.bounceGravity != bounceGravity ||
+                this.loopToggle != loopToggle || this.opacityMapMidPoint != opacityMapMidPoint || this.opacityMapToggle != opacityMapToggle || this.opacityMapEase != opacityMapEase || this.bounceCount != bounceCount ||
+                this.trailToggle != trailToggle || this.trailCount != trailCount || this.trailInterval != trailInterval || this.trailFade != trailFade || this.trailScale != trailScale
                 /* || this.easingType != item.EasingType || this.easingMode != item.EasingMode */)
             {
-
                 //this.に記憶
                 this.frame = frame;
+                this.fps = fps;
                 this.reverseDraw = reverseDraw;
                 this.fixedDraw = fixedDraw;
                 this.count = count;
@@ -430,7 +561,44 @@ namespace Particles3D
                 this.randomSatRange = randomSatRange;
                 this.randomLumRange = randomLumRange;
                 this.randomColorToggle = randomColorToggle;
-
+                this.calculationType = calculationType;
+                this.forcePitch = forcePitch;
+                this.forceYaw = forceYaw;
+                this.forceRoll = forceRoll;
+                this.forceVelocity = forceVelocity;
+                this.forceRandomVelocity = forceRandomVelocity;
+                this.forceRandomPitch = forceRandomPitch;
+                this.forceRandomYaw = forceRandomYaw;
+                this.forceRandomRoll = forceRandomRoll;
+                this.forceRandomCount = forceRandomCount;
+                this.floorActionType = floorActionType;
+                this.floorJudgementType = floorJudgementType;
+                this.floorY = floorY;
+                this.floorFadeTime = floorFadeTime;
+                this.floorWaitTime = floorWaitTime;
+                this.floorToggle = floorToggle;
+                this.zSortToggle = zSortToggle;
+                this.focusToggle = focusToggle;
+                this.focusFadeToggle = focusFadeToggle;
+                this.focusDepth = focusDepth;
+                this.focusRange = focusRange;
+                this.focusMaxBlur = focusMaxBlur;
+                this.focusFadeMinOpacity = focusFadeMinOpacity;
+                this.focusFallOffBlur = focusFallOffBlur;
+                this.airResistance = airResistance;
+                this.bounceFactor = bounceFactor;
+                this.bounceEnergyLoss = bounceEnergyLoss;
+                this.bounceGravity = bounceGravity;
+                this.bounceCount = bounceCount;
+                this.loopToggle = loopToggle;
+                this.opacityMapToggle = opacityMapToggle;
+                this.opacityMapMidPoint = opacityMapMidPoint;
+                this.opacityMapEase = opacityMapEase;
+                this.trailToggle = trailToggle;
+                this.trailCount = trailCount;
+                this.trailInterval = trailInterval;
+                this.trailFade = trailFade;
+                this.trailScale = trailScale;
 
                 if (pSEToggleX)
                 {
@@ -445,52 +613,76 @@ namespace Particles3D
                     this.endz = this.startz + this.endz;
                 }
 
+                //FloorとForceは常に計算する必要があるので、arrayNeedsUpdateには含めない
+                int numberOfGroupsForce = (int)Math.Ceiling((double)this.count / Math.Max(1, this.forceRandomCount));
+
+                var dc = devices.DeviceContext;
+
+                int numberofGroupsColor = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomColorCount));
+                // randomColorToggle が ON で、必要な数 (numberofGroupsColor) がプールの数 (hueEffects.Count) より多いか？
+                if (this.randomColorToggle && numberofGroupsColor > this.hueEffects.Count)
+                {
+                    // 3. 足りない分だけ new してプールに追加
+                    int needed = numberofGroupsColor - this.hueEffects.Count;
+                    for (int i = 0; i < needed; i++)
+                    {
+                        // new は「足りなくなった時」に「1回だけ」実行される
+                        this.hueEffects.Add(new Particles3DHueCustomEffect(this.devices));
+                    }
+                }
+
                 //---random関連---
                 if (arrayNeedsUpdate) // arrayNeedsUpdate が true ならば、this.変数への代入は実行済み
                 {
+
                     // 配列初期化時は、**this.に代入済みの新しい** this.randomSeed を参照する
                     staticRng = new Random(this.randomSeed);
 
                     // グループ数は count に固定（個体ごとにランダムな値を割り当てる）
-                    this.curveFactorArray = new float[this.count];
+                    EnsureArraySize(ref this.curveFactorArray, this.count);
 
                     for (int i = 0; i < this.count; i++)
                     {
-                        // 1.0 を中心に +/- (curveRange / 2) の範囲でブレさせるのが一般的
+                        // 1.0 を中心に +/- (curveRange / 2) の範囲でブレさせる
                         float factor = 1.0f + ((float)staticRng.NextDouble() * curveRange - (curveRange / 2.0f));
                         this.curveFactorArray[i] = factor;
                     }
                     if (this.fixedTrajectory)
                     {
-                        this.fixedPositionStartXArray = new float[this.count];
-                        this.fixedPositionStartYArray = new float[this.count];
-                        this.fixedPositionStartZArray = new float[this.count];
-                        this.fixedPositionEndXArray = new float[this.count];
-                        this.fixedPositionEndYArray = new float[this.count];
-                        this.fixedPositionEndZArray = new float[this.count];
-                        this.fixedGravityXArray = new float[this.count];
-                        this.fixedGravityYArray = new float[this.count];
-                        this.fixedGravityZArray = new float[this.count];
-                        this.fixedScaleStartXArray = new float[this.count];
-                        this.fixedScaleStartYArray = new float[this.count];
-                        this.fixedScaleStartZArray = new float[this.count];
-                        this.fixedScaleEndXArray = new float[this.count];
-                        this.fixedScaleEndYArray = new float[this.count];
-                        this.fixedScaleEndZArray = new float[this.count];
-                        this.fixedRotationStartXArray = new float[this.count];
-                        this.fixedRotationStartYArray = new float[this.count];
-                        this.fixedRotationStartZArray = new float[this.count];
-                        this.fixedRotationEndXArray = new float[this.count];
-                        this.fixedRotationEndYArray = new float[this.count];
-                        this.fixedRotationEndZArray = new float[this.count];
-                        this.fixedOpacityEndArray = new float[this.count];
-                        // ※ スケール、回転、不透明度も固定したいなら、配列と計算を追加
+                        EnsureArraySize(ref this.fixedPositionStartXArray, this.count);
+                        EnsureArraySize(ref this.fixedPositionStartYArray, this.count);
+                        EnsureArraySize(ref this.fixedPositionStartZArray, this.count);
+                        EnsureArraySize(ref this.fixedPositionEndXArray, this.count);
+                        EnsureArraySize(ref this.fixedPositionEndYArray, this.count);
+                        EnsureArraySize(ref this.fixedPositionEndZArray, this.count);
+                        EnsureArraySize(ref this.fixedGravityXArray, this.count);
+                        EnsureArraySize(ref this.fixedGravityYArray, this.count);
+                        EnsureArraySize(ref this.fixedGravityZArray, this.count);
+                        EnsureArraySize(ref this.fixedScaleStartXArray, this.count);
+                        EnsureArraySize(ref this.fixedScaleStartYArray, this.count);
+                        EnsureArraySize(ref this.fixedScaleStartZArray, this.count);
+                        EnsureArraySize(ref this.fixedScaleEndXArray, this.count);
+                        EnsureArraySize(ref this.fixedScaleEndYArray, this.count);
+                        EnsureArraySize(ref this.fixedScaleEndZArray, this.count);
+                        EnsureArraySize(ref this.fixedRotationStartXArray, this.count);
+                        EnsureArraySize(ref this.fixedRotationStartYArray, this.count);
+                        EnsureArraySize(ref this.fixedRotationStartZArray, this.count);
+                        EnsureArraySize(ref this.fixedRotationEndXArray, this.count);
+                        EnsureArraySize(ref this.fixedRotationEndYArray, this.count);
+                        EnsureArraySize(ref this.fixedRotationEndZArray, this.count);
+                        EnsureArraySize(ref this.fixedOpacityStartArray, this.count);
+                        EnsureArraySize(ref this.fixedOpacityMidArray, this.count);
+                        EnsureArraySize(ref this.fixedOpacityEndArray, this.count);
+                        EnsureArraySize(ref this.fixedForcePitchArray, this.count);
+                        EnsureArraySize(ref this.fixedForceYawArray, this.count);
+                        EnsureArraySize(ref this.fixedForceRollArray, this.count);
+                        EnsureArraySize(ref this.fixedForceVelocityArray, this.count);
 
-                        for (int i = 0; i < this.count; i++)
+                        Parallel.For(0, this.count, i =>
                         {
                             float T_launch_float = i * this.cycleTime;
 
-                            // ★ ここで float を long (フレーム数) にキャストして GetValue に渡す
+                            // ここで float を long (フレーム数) にキャストして GetValue に渡す
                             long T_launch_long = (long)T_launch_float;
                             // 個体 i の射出フレーム時間 T_launch を計算
 
@@ -513,7 +705,6 @@ namespace Particles3D
                             this.fixedPositionEndZArray[i] = launch_EndZ;
 
                             // pSEToggle (始点終点同期) の処理
-                            // ※pSEToggleがONの時は、始点の値 (launch_StartX) を使って計算
                             if (pSEToggleX)
                                 this.fixedPositionEndXArray[i] = launch_StartX + launch_EndX;
                             if (pSEToggleY)
@@ -541,80 +732,95 @@ namespace Particles3D
                             this.fixedRotationStartZArray[i] = (float)item.StartRotationZ.GetValue(T_launch_long, length, fps);
 
                             // 透明度固定値の計算と格納
+                            this.fixedOpacityStartArray[i] = (float)item.StartOpacity.GetValue(T_launch_long, length, fps);
+                            this.fixedOpacityMidArray[i] = (float)item.OpacityMapMidPoint.GetValue(T_launch_long, length, fps);
                             this.fixedOpacityEndArray[i] = (float)item.EndOpacity.GetValue(T_launch_long, length, fps);
-                        }
+
+                            this.fixedForcePitchArray[i] = (float)item.ForcePitch.GetValue(T_launch_long, length, fps);
+                            this.fixedForceYawArray[i] = (float)item.ForceYaw.GetValue(T_launch_long, length, fps);
+                            this.fixedForceRollArray[i] = (float)item.ForceRoll.GetValue(T_launch_long, length, fps);
+                            this.fixedForceVelocityArray[i] = (float)item.ForceVelocity.GetValue(T_launch_long, length, fps);
+                        });
                     }
-                    /*
-                    int numberOfGroupsColor = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomColorCount));
-                    this.randomHueOffsetArray = new float[numberOfGroupsColor];
-                    this.randomSatOffsetArray = new float[numberOfGroupsColor];
-                    this.randomLumOffsetArray = new float[numberOfGroupsColor];
-
-                    float satRange = this.randomSatRange / 100.0f;
-                    float lumRange = this.randomLumRange / 100.0f;
-
-                    for (int g = 0; g < numberOfGroupsColor; g++)
-                    {
-                        // H (色相) : 0-360度の「ズラし幅」
-                        float hueOffset = (float)staticRng.NextDouble() * this.randomHueRange - (this.randomHueRange / 2.0f);
-                        this.randomHueOffsetArray[g] = hueOffset;
-
-                        // S (彩度) : -1.0～1.0の「ズラし幅」
-                        float satOffset = (float)staticRng.NextDouble() * satRange - (satRange / 2.0f);
-                        this.randomSatOffsetArray[g] = satOffset;
-
-                        // L (明度) : -1.0～1.0の「ズラし幅」
-                        float lumOffset = (float)staticRng.NextDouble() * lumRange - (lumRange / 2.0f);
-                        this.randomLumOffsetArray[g] = lumOffset;
-                    }
-                    */
-                    foreach (var oldEffect in this.hueEffects)
-                    {
-                        oldEffect.Dispose();
-                    }
-                    this.hueEffects.Clear();
                     // (disposer に Collect して RemoveAndDisposeAll<HueCorrectionCustomEffect>() でもOK)
 
                     if (randomColorToggle)
                     {
                         // 2. HSLのランダムオフセット配列を計算 (これは元のコード)
                         int numberOfGroupsColor = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomColorCount));
-                        this.randomHueOffsetArray = new float[numberOfGroupsColor];
-                        this.randomSatOffsetArray = new float[numberOfGroupsColor];
-                        this.randomLumOffsetArray = new float[numberOfGroupsColor];
-                        // ... (satRange, lumRange の計算) ...
+                        EnsureArraySize(ref this.randomHueOffsetArray, numberOfGroupsColor);
+                        EnsureArraySize(ref this.randomSatOffsetArray, numberOfGroupsColor);
+                        EnsureArraySize(ref this.randomLumOffsetArray, numberOfGroupsColor);
+
+                        float satRange = this.randomSatRange / 100.0f;
+                        float lumRange = this.randomLumRange / 100.0f;
 
                         for (int g = 0; g < numberOfGroupsColor; g++)
                         {
                             // a. HSLオフセットを計算 (元のコード)
                             float hueOffset = (float)staticRng.NextDouble() * this.randomHueRange - (this.randomHueRange / 2.0f);
                             this.randomHueOffsetArray[g] = hueOffset;
-                            float satOffset = (float)staticRng.NextDouble() * this.randomSatRange - (this.randomSatRange / 2.0f);
+                            float satOffset = (float)staticRng.NextDouble() * satRange - (satRange / 2.0f);
                             this.randomSatOffsetArray[g] = satOffset;
-                            float lumOffset = (float)staticRng.NextDouble() * this.randomLumRange - (this.randomLumRange / 2.0f);
+                            float lumOffset = (float)staticRng.NextDouble() * lumRange - (lumRange / 2.0f);
                             this.randomLumOffsetArray[g] = lumOffset;
 
-                            // b. ★★★ HLSLエフェクトを「ここで」作成する ★★★
-                            var hueEffect = new Particles3DHueCustomEffect(this.devices);
 
-                            // c. ★★★ パラメータを「ここで」設定する ★★★
-                            // --- 新しいコード (置き換え) ---
+                            var hueEffect = this.hueEffects[g];
+
+                            // c.パラメータを「更新」する
                             hueEffect.HueShift = hueOffset;
-                            hueEffect.SaturationFactor = 1.0f + satOffset; // 1.0 を基準にズラす
-                            hueEffect.LuminanceFactor = 1.0f; // 明度は 1.0 (変化なし) or 1.0f + lumOffset
+                            hueEffect.SaturationFactor = 1.0f + satOffset;
+                            hueEffect.LuminanceFactor = 1.0f + lumOffset;
                             hueEffect.Factor = 1.0f;
 
-                            // d. ★★★ 作成したエフェクトをリストに保存 ★★★
-                            this.hueEffects.Add(hueEffect);
                         }
                     }
+                    EnsureArraySize(ref this.randomForcePitchArray, numberOfGroupsForce);
+                    EnsureArraySize(ref this.randomForceYawArray, numberOfGroupsForce);
+                    EnsureArraySize(ref this.randomForceRollArray, numberOfGroupsForce);
+                    EnsureArraySize(ref this.randomForceVelocityArray, numberOfGroupsForce);
 
+                    for (int g = 0; g < numberOfGroupsForce; g++)
+                    {
+                        int i = g * Math.Max(1, this.forceRandomCount); // グループの代表インデックス
+
+                        // 1. ベースとなる値を取得 (軌道固定を考慮)
+                        float basePitch = this.forcePitch;
+                        float baseYaw = this.forceYaw;
+                        float baseRoll = this.forceRoll;
+                        float baseVelocity = this.forceVelocity;
+
+                        if (this.fixedTrajectory)
+                        {
+                            if (this.fixedForcePitchArray != null && i < this.fixedForcePitchArray.Length)
+                                basePitch = this.fixedForcePitchArray[i];
+                            if (this.fixedForceYawArray != null && i < this.fixedForceYawArray.Length)
+                                baseYaw = this.fixedForceYawArray[i];
+                            if (this.fixedForceRollArray != null && i < this.fixedForceRollArray.Length)
+                                baseRoll = this.fixedForceRollArray[i];
+                            if (this.fixedForceVelocityArray != null && i < this.fixedForceVelocityArray.Length)
+                                baseVelocity = this.fixedForceVelocityArray[i];
+                        }
+
+                        // 2. ランダムなオフセットを計算
+                        float p_offset = (float)staticRng.NextDouble() * this.forceRandomPitch - (this.forceRandomPitch / 2.0f);
+                        float y_offset = (float)staticRng.NextDouble() * this.forceRandomYaw - (this.forceRandomYaw / 2.0f);
+                        float r_offset = (float)staticRng.NextDouble() * this.forceRandomRoll - (this.forceRandomRoll / 2.0f);
+                        float v_offset = (float)staticRng.NextDouble() * this.forceRandomVelocity - (this.forceRandomVelocity / 2.0f);
+
+                        // 3. 最終的な値を配列に保存
+                        this.randomForcePitchArray[g] = basePitch + p_offset;
+                        this.randomForceYawArray[g] = baseYaw + y_offset;
+                        this.randomForceRollArray[g] = baseRoll + r_offset;
+                        this.randomForceVelocityArray[g] = baseVelocity + v_offset;
+                    }
 
                     // --- X軸の配列計算 ---
                     int numberOfGroupsX = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomXCount));
 
                     // --- 始点 (StartX) の配列計算 ---
-                    this.startXArray = new float[numberOfGroupsX];
+                    EnsureArraySize(ref this.startXArray, numberOfGroupsX);
                     for (int g = 0; g < numberOfGroupsX; g++)
                     {
                         // グループgの代表インデックスiを計算
@@ -633,7 +839,7 @@ namespace Particles3D
                     }
 
                     // --- 終点 (EndX) の配列計算 ---
-                    this.targetXArray = new float[numberOfGroupsX];
+                    EnsureArraySize(ref this.targetXArray, numberOfGroupsX);
                     for (int g = 0; g < numberOfGroupsX; g++)
                     {
                         int i = g * Math.Max(1, this.randomXCount);
@@ -669,7 +875,7 @@ namespace Particles3D
                     int numberOfGroupsY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomYCount));
 
                     // --- 始点 (StartY) の配列計算 ---
-                    this.startYArray = new float[numberOfGroupsY];
+                    EnsureArraySize(ref this.startYArray, numberOfGroupsY);
                     for (int g = 0; g < numberOfGroupsY; g++)
                     {
                         int i = g * Math.Max(1, this.randomYCount);
@@ -686,7 +892,7 @@ namespace Particles3D
                     }
 
                     // --- 終点 (EndY) の配列計算 ---
-                    this.targetYArray = new float[numberOfGroupsY];
+                    EnsureArraySize(ref this.targetYArray, numberOfGroupsY);
                     for (int g = 0; g < numberOfGroupsY; g++)
                     {
                         int i = g * Math.Max(1, this.randomYCount);
@@ -721,7 +927,7 @@ namespace Particles3D
                     int numberOfGroupsZ = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomZCount));
 
                     // --- 始点 (StartZ) の配列計算 ---
-                    this.startZArray = new float[numberOfGroupsZ];
+                    EnsureArraySize(ref this.startZArray, numberOfGroupsZ);
                     for (int g = 0; g < numberOfGroupsZ; g++)
                     {
                         int i = g * Math.Max(1, this.randomZCount);
@@ -738,7 +944,7 @@ namespace Particles3D
                     }
 
                     // --- 終点 (EndZ) の配列計算 ---
-                    this.targetZArray = new float[numberOfGroupsZ];
+                    EnsureArraySize(ref this.targetZArray, numberOfGroupsZ);
                     for (int g = 0; g < numberOfGroupsZ; g++)
                     {
                         int i = g * Math.Max(1, this.randomZCount);
@@ -771,9 +977,8 @@ namespace Particles3D
 
                     // --- Scale X軸の配列計算 ---
                     int numberOfGroupsScaleX = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomScaleCount));
-                    this.startScaleXArray = new float[numberOfGroupsScaleX];
-                    this.targetScaleXArray = new float[numberOfGroupsScaleX];
-
+                    EnsureArraySize(ref this.startScaleXArray, numberOfGroupsScaleX);
+                    EnsureArraySize(ref this.targetScaleXArray, numberOfGroupsScaleX);
                     for (int g = 0; g < numberOfGroupsScaleX; g++)
                     {
                         int i = g * Math.Max(1, this.randomScaleCount);
@@ -786,7 +991,7 @@ namespace Particles3D
 
                         // 1. 始点のランダム値計算
                         float startXOffset = (float)staticRng!.NextDouble() * this.randomStartScaleRange - (this.randomStartScaleRange / 2.0f);
-                        this.startScaleXArray[g] = this.scalex + startXOffset; // this.scalex は Start/End 共通の ScaleX のアニメーション値
+                        this.startScaleXArray[g] = baseStartX + startXOffset;
                     }
                     for (int g = 0; g < numberOfGroupsScaleX; g++)
                     {
@@ -822,9 +1027,8 @@ namespace Particles3D
 
                     // --- Scale Y軸の配列計算 ---
                     int numberOfGroupsScaleY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomScaleCount));
-                    this.startScaleYArray = new float[numberOfGroupsScaleY];
-                    this.targetScaleYArray = new float[numberOfGroupsScaleY];
-
+                    EnsureArraySize(ref this.startScaleYArray, numberOfGroupsScaleY);
+                    EnsureArraySize(ref this.targetScaleYArray, numberOfGroupsScaleY);
                     for (int g = 0; g < numberOfGroupsScaleY; g++)
                     {
                         int i = g * Math.Max(1, this.randomScaleCount);
@@ -837,7 +1041,7 @@ namespace Particles3D
 
                         // 1. 始点のランダム値計算
                         float startYOffset = (float)staticRng!.NextDouble() * this.randomStartScaleRange - (this.randomStartScaleRange / 2.0f);
-                        this.startScaleYArray[g] = this.scaley + startYOffset; // this.scaley は Start/End 共通の ScaleY のアニメーション値
+                        this.startScaleYArray[g] = baseStartY + startYOffset;
                     }
                     for (int g = 0; g < numberOfGroupsScaleY; g++)
                     {
@@ -872,9 +1076,8 @@ namespace Particles3D
                     }
                     // --- Scale Z軸の配列計算 ---
                     int numberOfGroupsScaleZ = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomScaleCount));
-                    this.startScaleZArray = new float[numberOfGroupsScaleZ];
-                    this.targetScaleZArray = new float[numberOfGroupsScaleZ];
-
+                    EnsureArraySize(ref this.startScaleZArray, numberOfGroupsScaleZ);
+                    EnsureArraySize(ref this.targetScaleZArray, numberOfGroupsScaleZ);
                     for (int g = 0; g < numberOfGroupsScaleZ; g++)
                     {
                         int i = g * Math.Max(1, this.randomScaleCount);
@@ -887,7 +1090,7 @@ namespace Particles3D
 
                         // 1. 始点のランダム値計算
                         float startZOffset = (float)staticRng!.NextDouble() * this.randomStartScaleRange - (this.randomStartScaleRange / 2.0f);
-                        this.startScaleZArray[g] = this.scalez + startZOffset; // this.scalez は Start/End 共通の ScaleZ のアニメーション値
+                        this.startScaleZArray[g] = baseStartZ + startZOffset;
                     }
                     for (int g = 0; g < numberOfGroupsScaleZ; g++)
                     {
@@ -938,8 +1141,8 @@ namespace Particles3D
 
                     //回転X
                     int numberOfGroupsRotX = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotXCount));
-                    this.startRotationXArray = new float[numberOfGroupsRotX];
-                    this.targetRotationXArray = new float[numberOfGroupsRotX];
+                    EnsureArraySize(ref this.startRotationXArray, numberOfGroupsRotX);
+                    EnsureArraySize(ref this.targetRotationXArray, numberOfGroupsRotX);
                     for (int g = 0; g < numberOfGroupsRotX; g++)
                     {
                         //グループgの代表インデックスiを計算
@@ -989,9 +1192,8 @@ namespace Particles3D
 
                     // --- Rotation Y軸の配列計算 ---
                     int numberOfGroupsRotY = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotYCount));
-                    this.startRotationYArray = new float[numberOfGroupsRotY];
-                    this.targetRotationYArray = new float[numberOfGroupsRotY];
-
+                    EnsureArraySize(ref this.startRotationYArray, numberOfGroupsRotY);
+                    EnsureArraySize(ref this.targetRotationYArray, numberOfGroupsRotY);
                     for (int g = 0; g < numberOfGroupsRotY; g++)
                     {
                         // グループgの代表インデックスiを計算
@@ -1028,7 +1230,6 @@ namespace Particles3D
                             {
                                 baseStartY = this.fixedRotationStartYArray[i]; // 軌道固定時
                             }
-                            //修正ここまで
 
                             float startYOffset = this.startRotationYArray[g] - baseStartY; // ランダム始点と「ベース始点」の差
                             baseEnd += startYOffset;
@@ -1041,9 +1242,8 @@ namespace Particles3D
 
                     // --- Rotation Z軸の配列計算 ---
                     int numberOfGroupsRotZ = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomRotZCount));
-                    this.startRotationZArray = new float[numberOfGroupsRotZ];
-                    this.targetRotationZArray = new float[numberOfGroupsRotZ];
-
+                    EnsureArraySize(ref this.startRotationZArray, numberOfGroupsRotZ);
+                    EnsureArraySize(ref this.targetRotationZArray, numberOfGroupsRotZ);
                     for (int g = 0; g < numberOfGroupsRotZ; g++)
                     {
                         //グループgの代表インデックスiを計算
@@ -1091,9 +1291,8 @@ namespace Particles3D
                     }
                     //Opacity
                     int numberOfGroupsOpacity = (int)Math.Ceiling((double)this.count / Math.Max(1, this.randomOpacityCount));
-                    this.startOpacityArray = new float[numberOfGroupsOpacity];
-                    this.targetOpacityArray = new float[numberOfGroupsOpacity];
-
+                    EnsureArraySize(ref this.startOpacityArray, numberOfGroupsOpacity);
+                    EnsureArraySize(ref this.targetOpacityArray, numberOfGroupsOpacity);
                     for (int g = 0; g < numberOfGroupsOpacity; g++)
                     {
                         // 1. 最小値・最大値を取得 (0-100スケール)
@@ -1111,763 +1310,767 @@ namespace Particles3D
                         this.startOpacityArray[g] = randomOpacity;
                         this.targetOpacityArray[g] = randomOpacity;
 
-                        // (元の baseEnd や SEToggle や endOffset の計算は不要なので削除)
+                    }
+                    //---floor---
+                    EnsureArraySize(ref this.hitProgressArray, numberOfGroupsForce);// グループ数
+                    EnsureArraySize(ref this.hitVelocityArray, numberOfGroupsForce);// 速度配列
+                    //floor計算
+                    if (this.floorToggle)
+                    {
+                        const int SIMULATION_STEPS = 30; // 30ステップで衝突判定（精度）
+                        float FloorY = this.floorY;
+                        float stepProgress = 1.0f / SIMULATION_STEPS; // 1ステップあたりの進行度
+
+                        Parallel.For(0, numberOfGroupsForce, g =>
+                        {
+                            float hitProgress = float.MaxValue; // デフォルト = 衝突しない
+                            Vector3 hitVelocity = Vector3.Zero; // デフォルト速度
+
+                            // 1ステップ前の座標と進行度を保持
+                            Vector3 prevPos = CalculatePosition_Internal(i: (g * this.forceRandomCount), progress: 0f); //
+                            float prevProgress = 0f; // 進行度も保持
+
+                            for (int step = 1; step <= SIMULATION_STEPS; step++)
+                            {
+                                float currentProgress = (float)step * stepProgress;
+                                Vector3 currentPos = CalculatePosition_Internal(i: (g * this.forceRandomCount), progress: currentProgress);
+
+                                bool hasHit = false;
+
+                                // 床下判定 (Type 0)
+                                if (this.floorJudgementType == 0 && currentPos.Y >= FloorY && prevPos.Y < FloorY)
+                                {
+                                    hasHit = true;
+                                }
+                                // 床上判定 (Type 1)
+                                if (this.floorJudgementType == 1 && currentPos.Y <= FloorY && prevPos.Y > FloorY)
+                                {
+                                    hasHit = true;
+                                }
+
+                                if (hasHit)
+                                {
+                                    //ここから補間ロジック
+
+                                    // 1. このステップでのY軸の総移動量
+                                    float yTravelInStep = currentPos.Y - prevPos.Y;
+
+                                    // 2. 衝突地点までのY軸移動量
+                                    float yTravelToHit = FloorY - prevPos.Y;
+
+                                    // 3. 補間係数 (0.0 ～ 1.0)
+                                    float interpolationFactor = 0.0f;
+                                    if (Math.Abs(yTravelInStep) > 0.0001f)
+                                    {
+                                        interpolationFactor = yTravelToHit / yTravelInStep;
+                                        interpolationFactor = Math.Clamp(interpolationFactor, 0.0f, 1.0f);
+                                    }
+
+                                    // 4. このステップの進行度の「幅」
+                                    float stepDuration = currentProgress - prevProgress;
+
+                                    // 5. 真の衝突進行度 (hitProgress) を計算
+                                    hitProgress = prevProgress + (stepDuration * interpolationFactor);
+
+                                    // 6. 衝突速度 (Velocity) を計算
+                                    //    (t_sec が 0 にならないようクランプ)
+                                    float t_sec = (this.fps > 0) ? (stepDuration * (this.travelTime / this.fps)) : 0.01f;
+                                    if (t_sec < 0.0001f) t_sec = 0.0001f;
+
+                                    hitVelocity = (currentPos - prevPos) / t_sec;
+
+                                    break; // 衝突したので、このグループ(g)のシミュレーションは終了
+                                }
+
+                                prevPos = currentPos;
+                                prevProgress = currentProgress;
+                            }
+                            this.hitProgressArray[g] = hitProgress;
+                            this.hitVelocityArray[g] = hitVelocity;
+                        });
                     }
                 }
 
 
-
                 //---random関連終了---
-
 
                 disposer.RemoveAndDispose(ref commandList);
 
+                float loopDuration = this.count * this.cycleTime;
+                if (loopDuration <= 0) loopDuration = 1;
+
+                // 2. 描画に使う「基準時間」を決定
+                float timeToUse = this.frame;
 
 
-                var dc = devices.DeviceContext;
                 commandList = dc.CreateCommandList();
                 disposer.Collect(commandList);
                 dc.Target = commandList;
                 dc.BeginDraw();
                 dc.Clear(null);
 
-
+                int usedNodeCount = 0;
 
                 //実際の描画の設計
-                void draw(int i)
+                void draw(int i, float baseVirtualFrame)
                 {
+                    // --- 基本の進行度(mainProgress)を計算 ---
+                    float mainProgress = float.NegativeInfinity;
 
-                    float baseprogress = (count <= 1) ? 0f : (float)i / (count - 1);
-
-                    float startFrameOfItem = (float)i * delayFramesPerItem;
-
-                    if (frame < startFrameOfItem)
+                    if (this.loopToggle)
                     {
-                        return;
-                    }
+                        // --- ループモード (V5) ---
+                        float T_base_start = i * this.cycleTime;
+                        float timeInLoop = baseVirtualFrame % loopDuration;
+                        float T_end_relative = T_base_start + this.travelTime;
+                        float startFrameOfItem = (float)i * delayFramesPerItem;
 
-                    //---射出系統---
+                        if (timeInLoop < startFrameOfItem) return;
 
-                    float T_start = i * this.cycleTime;
-                    float T_end = T_start + this.travelTime;
-
-                    if (this.frame < T_start || this.frame > T_end)
-                    {
-                        return;
-                    }
-                    float progress = (this.frame - T_start) / this.travelTime;
-
-                    if (this.curveToggle && this.curveFactorArray != null && this.curveFactorArray.Length > i)
-                    {
-                        float curveFactor = this.curveFactorArray[i];
-
-                        progress = progress * curveFactor;
-
-                    }
-
-                    progress = Math.Min(1.0f, Math.Max(0.0f, progress));
-                    /*
-                    float PositionX_progress = progress; 
-                    float PositionY_progress = progress; 
-                    float PositionZ_progress = progress; 
-                    */
-                    float RotationX_progress = progress;
-                    float RotationY_progress = progress;
-                    float RotationZ_progress = progress;
-
-                    float ScaleX_progress = progress;
-                    float ScaleY_progress = progress;
-                    float ScaleZ_progress = progress;
-
-                    float Opacity_progress = progress;
-
-                    //---射出系統終了---
-
-                    //---軌道固定系統---
-                    /*
-                    float current_startx = this.startx;
-                    float current_starty = this.starty;
-                    float current_startz = this.startz;
-                    if (this.fixedTrajectory && this.fixedPositionStartXArray != null && this.fixedPositionStartXArray.Length > i)
-                        current_startx = this.fixedPositionStartXArray[i];
-                    if (this.fixedTrajectory && this.fixedPositionStartYArray != null && this.fixedPositionStartYArray.Length > i)
-                        current_starty = this.fixedPositionStartYArray[i];
-                    if (this.fixedTrajectory && this.fixedPositionStartZArray != null && this.fixedPositionStartZArray.Length > i)
-                        current_startz = this.fixedPositionStartZArray[i];
-
-                    float current_endx = this.endx;
-                    if (this.fixedTrajectory && this.fixedPositionEndXArray != null && this.fixedPositionEndXArray.Length > i)
-                    {
-                        current_endx = this.fixedPositionEndXArray[i];
-                    }
-                    // Y, Z 軸も同様に current_endy, current_endz を決定
-                    float current_endy = this.endy;
-                    if (this.fixedTrajectory && this.fixedPositionEndYArray != null && this.fixedPositionEndYArray.Length > i)
-                    {
-                        current_endy = this.fixedPositionEndYArray[i];
-                    }
-                    float current_endz = this.endz;
-                    if (this.fixedTrajectory && this.fixedPositionEndZArray != null && this.fixedPositionEndZArray.Length > i)
-                    {
-                        current_endz = this.fixedPositionEndZArray[i];
-                    }
-                    float current_gravityX = this.gravityX;
-                    if (this.fixedTrajectory && this.fixedGravityXArray != null && this.fixedGravityXArray.Length > i)
-                    {
-                        current_gravityX = this.fixedGravityXArray[i];
-                    }
-                    float current_gravityY = this.gravityY;
-                    if (this.fixedTrajectory && this.fixedGravityYArray != null && this.fixedGravityYArray.Length > i)
-                    {
-                        current_gravityY = this.fixedGravityYArray[i];
-                    }
-                    float current_gravityZ = this.gravityZ;
-                    if (this.fixedTrajectory && this.fixedGravityZArray != null && this.fixedGravityZArray.Length > i)
-                    {
-                        current_gravityZ = this.fixedGravityZArray[i];
-                    }
-                    */
-                    float current_startscalex = this.scaleStartx;
-                    if (this.fixedTrajectory && this.fixedScaleStartXArray != null && this.fixedScaleStartXArray.Length > i)
-                    {
-                        current_startscalex = this.fixedScaleStartXArray[i];
-                    }
-                    float current_startscaley = this.scaleStarty;
-                    if (this.fixedTrajectory && this.fixedScaleStartYArray != null && this.fixedScaleStartYArray.Length > i)
-                    {
-                        current_startscaley = this.fixedScaleStartYArray[i];
-                    }
-                    float current_startscalez = this.scaleStartz;
-                    if (this.fixedTrajectory && this.fixedScaleStartZArray != null && this.fixedScaleStartZArray.Length > i)
-                    {
-                        current_startscalez = this.fixedScaleStartZArray[i];
-                    }
-                    float current_scalex = this.scalex;
-                    if (this.fixedTrajectory && this.fixedScaleEndXArray != null && this.fixedScaleEndXArray.Length > i)
-                    {
-                        current_scalex = this.fixedScaleEndXArray[i];
-                    }
-                    float current_scaley = this.scaley;
-                    if (this.fixedTrajectory && this.fixedScaleEndYArray != null && this.fixedScaleEndYArray.Length > i)
-                    {
-                        current_scaley = this.fixedScaleEndYArray[i];
-                    }
-                    float current_scalez = this.scalez;
-                    if (this.fixedTrajectory && this.fixedScaleEndZArray != null && this.fixedScaleEndZArray.Length > i)
-                    {
-                        current_scalez = this.fixedScaleEndZArray[i];
-                    }
-
-                    // ★ 回転固定値の決定
-                    float current_startRotationX = this.startRotationX;
-                    if (this.fixedTrajectory && this.fixedRotationStartXArray != null && this.fixedRotationStartXArray.Length > i)
-                    {
-                        current_startRotationX = this.fixedRotationStartXArray[i];
-                    }
-                    float current_startRotationY = this.startRotationY;
-                    if (this.fixedTrajectory && this.fixedRotationStartYArray != null && this.fixedRotationStartYArray.Length > i)
-                    {
-                        current_startRotationY = this.fixedRotationStartYArray[i];
-                    }
-                    float current_startRotationZ = this.startRotationZ;
-                    if (this.fixedTrajectory && this.fixedRotationStartZArray != null && this.fixedRotationStartZArray.Length > i)
-                    {
-                        current_startRotationZ = this.fixedRotationStartZArray[i];
-                    }
-                    float current_endRotationX = this.endRotationX;
-                    if (this.fixedTrajectory && this.fixedRotationEndXArray != null && this.fixedRotationEndXArray.Length > i)
-                    {
-                        current_endRotationX = this.fixedRotationEndXArray[i];
-                    }
-                    float current_endRotationY = this.endRotationY;
-                    if (this.fixedTrajectory && this.fixedRotationEndYArray != null && this.fixedRotationEndYArray.Length > i)
-                    {
-                        current_endRotationY = this.fixedRotationEndYArray[i];
-                    }
-                    float current_endRotationZ = this.endRotationZ;
-                    if (this.fixedTrajectory && this.fixedRotationEndZArray != null && this.fixedRotationEndZArray.Length > i)
-                    {
-                        current_endRotationZ = this.fixedRotationEndZArray[i];
-                    }
-
-                    // ★ 透明度固定値の決定
-                    float current_endopacity = this.endopacity;
-                    if (this.fixedTrajectory && this.fixedOpacityEndArray != null && this.fixedOpacityEndArray.Length > i)
-                    {
-                        current_endopacity = this.fixedOpacityEndArray[i];
-                    }
-                    //---軌道固定系統---
-                    int safeCount;
-                    int groupIndex;
-                    //---random関連---
-                    /*
-                    //初期値
-                    float currentx_base = 0f;
-                    float currenty_base = 0f;
-                    float currentz_base = 0f;
-                    // X座標の計算
-                    if (this.randomToggleX && targetXArray != null && startXArray != null && targetXArray.Length > 0 && startXArray.Length > 0)
-                    {
-                        int safeRandomXCount = Math.Max(1, this.randomXCount);
-                        int groupIndexX = i / safeRandomXCount;
-
-                        // 配列の安全なインデックスを取得
-                        int targetIndex = Math.Min(groupIndexX, targetXArray.Length - 1);
-
-                        // ランダムな始点と終点を取得
-                        float startX_Random = startXArray[targetIndex];
-                        float targetX = targetXArray[targetIndex];
-
-                        // 進行度 progress を使用して、ランダムな始点から終点へ線形補間
-                        // (イージングを適用したい場合は、ここで progress にイージング関数を適用)
-                        currentx_base = startX_Random + (targetX - startX_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時（以前のロジック）
-                        currentx_base = current_startx + (current_endx - current_startx) * PositionX_progress;
-                    }
-
-                    // ★Y座標の計算を追加
-                    if (this.randomToggleY && targetYArray != null && startYArray != null && targetYArray.Length > 0 && startYArray.Length > 0)
-                    {
-                        int safeRandomYCount = Math.Max(1, this.randomYCount);
-                        int groupIndexY = i / safeRandomYCount;
-
-                        // 配列の安全なインデックスを取得
-                        int targetIndex = Math.Min(groupIndexY, targetYArray.Length - 1);
-
-                        // ランダムな始点と終点を取得
-                        float startY_Random = startYArray[targetIndex];
-                        float targetY = targetYArray[targetIndex];
-
-                        // 進行度 progress を使用して、ランダムな始点から終点へ線形補間
-                        // (イージングを適用したい場合は、ここで progress にイージング関数を適用)
-                        currenty_base = startY_Random + (targetY - startY_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時（以前のロジック）
-                        currenty_base = current_starty + (current_endy - current_starty) * PositionY_progress;
-                    }
-
-
-                    // ★Z座標の計算を追加
-                    if (this.randomToggleZ && targetZArray != null && startZArray != null && targetZArray.Length > 0 && startZArray.Length > 0)
-                    {
-                        int safeRandomZCount = Math.Max(1, this.randomZCount);
-                        int groupIndexZ = i / safeRandomZCount;
-
-                        // 配列の安全なインデックスを取得
-                        int targetIndex = Math.Min(groupIndexZ, targetZArray.Length - 1);
-
-                        // ランダムな始点と終点を取得
-                        float startZ_Random = startZArray[targetIndex];
-                        float targetZ = targetZArray[targetIndex];
-
-                        // 進行度 progress を使用して、ランダムな始点から終点へ線形補間
-                        // (イージングを適用したい場合は、ここで progress にイージング関数を適用)
-                        currentz_base = startZ_Random + (targetZ - startZ_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時（以前のロジック）
-                        currentz_base = current_startz + (current_endz - current_startz) * PositionZ_progress;
-                    }
-                    */
-                    // ★ スケール X軸の計算
-                    float finalScalex;
-                    if (this.randomScaleToggle && targetScaleXArray != null && startScaleXArray != null && targetScaleXArray.Length > 0 && startScaleXArray.Length > 0)
-                    {
-                        safeCount = Math.Max(1, this.randomScaleCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetScaleXArray.Length - 1);
-
-                        float startX_Random = startScaleXArray[targetIndex];
-                        float targetX = targetScaleXArray[targetIndex];
-
-                        // ランダムな始点から終点へ補間
-                        finalScalex = startX_Random + (targetX - startX_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時 or 配列エラー時
-                        current_scalex = this.scalex; // (FixedTrajectoryを適用済み)
-                        if (this.fixedTrajectory && this.fixedScaleEndXArray != null && this.fixedScaleEndXArray.Length > i)
+                        if (T_end_relative <= loopDuration)
                         {
-                            current_scalex = this.fixedScaleEndXArray[i];
-                        }
-                        finalScalex = current_startscalex + (current_scalex - current_startscalex) * ScaleX_progress;
-                    }
-                    // ★ スケール Y軸の計算
-                    float finalScaley;
-                    if (this.randomScaleToggle && targetScaleYArray != null && startScaleYArray != null && targetScaleYArray.Length > 0 && startScaleYArray.Length > 0)
-                    {
-                        safeCount = Math.Max(1, this.randomScaleCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetScaleYArray.Length - 1);
-
-                        float startY_Random = startScaleYArray[targetIndex];
-                        float targetY = targetScaleYArray[targetIndex];
-
-                        // ランダムな始点から終点へ補間
-                        finalScaley = startY_Random + (targetY - startY_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時 or 配列エラー時
-                        current_scaley = this.scaley; // (FixedTrajectoryを適用済み)
-                        if (this.fixedTrajectory && this.fixedScaleEndYArray != null && this.fixedScaleEndYArray.Length > i)
-                        {
-                            current_scaley = this.fixedScaleEndYArray[i];
-                        }
-                        finalScaley = current_startscaley + (current_scaley - current_startscaley) * ScaleY_progress;
-                    }
-                    //スケールZ
-                    float finalScalez;
-                    if (this.randomScaleToggle && targetScaleZArray != null && startScaleZArray != null && targetScaleZArray.Length > 0 && startScaleZArray.Length > 0)
-                    {
-                        safeCount = Math.Max(1, this.randomScaleCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetScaleZArray.Length - 1);
-
-                        float startZ_Random = startScaleZArray[targetIndex];
-                        float targetZ = targetScaleZArray[targetIndex];
-
-                        // ランダムな始点から終点へ補間
-                        finalScalez = startZ_Random + (targetZ - startZ_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時 or 配列エラー時
-                        current_scalez = this.scalez; // (FixedTrajectoryを適用済み)
-                        if (this.fixedTrajectory && this.fixedScaleEndZArray != null && this.fixedScaleEndZArray.Length > i)
-                        {
-                            current_scalez = this.fixedScaleEndZArray[i];
-                        }
-                        finalScalez = current_startscalez + (current_scalez - current_startscalez) * ScaleZ_progress;
-                    }
-
-                    // --- Rotation X軸の計算 ---
-                    float finalRotX;
-                    if (this.randomRotXToggle && targetRotationXArray != null && startRotationXArray != null && targetRotationXArray.Length > 0 && startRotationXArray.Length > 0)
-                    {
-                        safeCount = Math.Max(1, this.randomRotXCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetRotationXArray.Length - 1);
-
-                        float startX_Random = startRotationXArray[targetIndex];
-                        float targetX = targetRotationXArray[targetIndex];
-
-                        finalRotX = startX_Random + (targetX - startX_Random) * progress;
-                    }
-                    else
-                    {
-                        // ランダム無効時 or 配列エラー時
-                        current_endRotationX = this.endRotationX; // FixedTrajectory処理後の値を使用
-                        if (this.fixedTrajectory && this.fixedRotationEndXArray != null && this.fixedRotationEndXArray.Length > i)
-                        {
-                            current_endRotationX = this.fixedRotationEndXArray[i];
-                        }
-                        finalRotX = current_startRotationX + (current_endRotationX - current_startRotationX) * RotationX_progress;
-                    }
-
-                    // --- Rotation Y軸の計算 ---
-                    float finalRotY;
-                    // Y軸のランダム計算ロジック...（X軸とほぼ同じ）
-                    if (this.randomRotYToggle && targetRotationYArray != null && startRotationYArray != null && targetRotationYArray.Length > 0 && startRotationYArray.Length > 0)
-                    {
-                        safeCount = Math.Max(1, this.randomRotYCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetRotationYArray.Length - 1);
-
-                        float startY_Random = startRotationYArray[targetIndex];
-                        float targetY = targetRotationYArray[targetIndex];
-
-                        finalRotY = startY_Random + (targetY - startY_Random) * progress;
-                    }
-                    else
-                    {
-                        current_endRotationY = this.endRotationY;
-                        if (this.fixedTrajectory && this.fixedRotationEndYArray != null && this.fixedRotationEndYArray.Length > i)
-                        {
-                            current_endRotationY = this.fixedRotationEndYArray[i];
-                        }
-                        finalRotY = current_startRotationY + (current_endRotationY - current_startRotationY) * RotationY_progress;
-                    }
-
-                    // --- Rotation Z軸の計算 ---
-                    float finalRotZ;
-                    // Z軸のランダム計算ロジック...（X軸とほぼ同じ）
-                    if (this.randomRotZToggle && targetRotationZArray != null && startRotationZArray != null && targetRotationZArray.Length > 0 && startRotationZArray.Length > 0)
-                    {
-                        safeCount = Math.Max(1, this.randomRotZCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetRotationZArray.Length - 1);
-
-                        float startZ_Random = startRotationZArray[targetIndex];
-                        float targetZ = targetRotationZArray[targetIndex];
-
-                        finalRotZ = startZ_Random + (targetZ - startZ_Random) * progress;
-                    }
-                    else
-                    {
-                        current_endRotationZ = this.endRotationZ;
-                        if (this.fixedTrajectory && this.fixedRotationEndZArray != null && this.fixedRotationEndZArray.Length > i)
-                        {
-                            current_endRotationZ = this.fixedRotationEndZArray[i];
-                        }
-                        finalRotZ = current_startRotationZ + (current_endRotationZ - current_startRotationZ) * RotationZ_progress;
-                    }
-                    float baseAnimatedOpacity = this.startopacity + (current_endopacity - this.startopacity) * Opacity_progress;
-
-                    // 2. 最終的な不透明度(finalOpacity)を決定する (0-100 スケール)
-                    float finalOpacity;
-
-                    if (this.randomOpacityToggle && targetOpacityArray != null && startOpacityArray != null && targetOpacityArray.Length > 0 && startOpacityArray.Length > 0 && this.count > i)
-                    {
-                        // --- ランダムON ---
-                        // a. 事前計算した「基本ランダム不透明度」を取得 (0-100 スケール)
-                        safeCount = Math.Max(1, this.randomOpacityCount);
-                        groupIndex = i / safeCount;
-                        int targetIndex = Math.Min(groupIndex, targetOpacityArray.Length - 1);
-                        float randomBaseOpacity = startOpacityArray[targetIndex]; // (target も同じ値が入ってる)
-
-                        // b. アニメーション値を「倍率」に変換 (e.g., 100% -> 1.0, 200% -> 2.0, 0% -> 0.0)
-                        float opacityMultiplier = baseAnimatedOpacity / 100.0f;
-
-                        // c. ランダム値に倍率を適用する
-                        // (例: random 30% * multiplier 2.0 = 60%)
-                        // (例: random 80% * multiplier 2.0 = 160%)
-                        finalOpacity = randomBaseOpacity * opacityMultiplier;
-                    }
-                    else
-                    {
-                        // --- ランダムOFF ---
-                        // UIのアニメーション値をそのまま使う
-                        finalOpacity = baseAnimatedOpacity;
-                    }
-                    //---random関連終了---
-
-
-                    //色計算
-                    //(A R G B の線形補間)
-                    byte currentA = (byte)(this.startColor.A + (this.endColor.A - this.startColor.A) * progress);
-                    byte currentR = (byte)(this.startColor.R + (this.endColor.R - this.startColor.R) * progress);
-                    byte currentG = (byte)(this.startColor.G + (this.endColor.G - this.startColor.G) * progress);
-                    byte currentB = (byte)(this.startColor.B + (this.endColor.B - this.startColor.B) * progress);
-
-                    // --- 3. ColorMatrix に最終的な色を渡す ---
-                    var tint = new Vortice.Mathematics.Color4(
-                        currentR / 255.0f,
-                        currentG / 255.0f,
-                        currentB / 255.0f,
-                        currentA / 255.0f
-                    );
-
-                    // 3. ColorMatrix エフェクトを作成
-                    using var colorEffect = new Vortice.Direct2D1.Effects.ColorMatrix(dc);
-                    colorEffect.SetInput(0, input, true); // ★入力は "input"
-                    using var opacityEffect = new Opacity(dc);
-
-                    // 4. 色を乗算する「行列」を作成
-                    var tintMatrix = new Matrix5x4
-                    {
-                        M11 = tint.R,
-                        M12 = 0,
-                        M13 = 0,
-                        M14 = 0,   // R' = R_in * tint.R
-                        M21 = 0,
-                        M22 = tint.G,
-                        M23 = 0,
-                        M24 = 0,   // G' = G_in * tint.G
-                        M31 = 0,
-                        M32 = 0,
-                        M33 = tint.B,
-                        M34 = 0,   // B' = B_in * tint.B
-                        M41 = 0,
-                        M42 = 0,
-                        M43 = 0,
-                        M44 = tint.A,   // A' = A_in * tint.A
-                        M51 = 0,
-                        M52 = 0,
-                        M53 = 0,
-                        M54 = 0        // Offsets (R_add, G_add, B_add, A_add)
-                    };
-                    colorEffect.Matrix = tintMatrix; // Vortice v3以降は .Value, 古いと .Matrix かも
-
-                    using var colorOutput = colorEffect.Output; // ★色が付いた画像
-
-                    safeCount = Math.Max(1, this.randomColorCount);
-                    groupIndex = i / safeCount;
-                    // 2.リストの範囲外なら描画しない (安全装置) 
-                    if (randomColorToggle)
-                    {
-                        if (groupIndex >= this.hueEffects.Count)
-                        {
-                            // (colorOutput を input で置き換えるか、いっそ return する)
-                            opacityEffect.SetInput(0, colorOutput, true); // とりあえずシェーダーをスキップ
+                            if (timeInLoop >= T_base_start)
+                            {
+                                mainProgress = (timeInLoop - T_base_start) / this.travelTime;
+                            }
                         }
                         else
                         {
-                            // 3.事前計算済みのエフェクトをリストから取得 
-                            var hueEffect = this.hueEffects[groupIndex];
-
-                            // 4.毎フレーム「入力」だけセットし直す
-                            hueEffect.SetInput(0, colorOutput, true);
-
-                            using var hueOutput = hueEffect.Output;
-
-                            opacityEffect.SetInput(0, hueOutput, true);
-                        }
-                    }
-                    else
-                    {
-                        opacityEffect.SetInput(0, colorOutput, true);
-                    }
-
-
-                    //float currentOpacity = (startopacity / 100.0f) + ((finalOpacity / 100.0f) - (startopacity / 100.0f)) * Opacity_progress;
-                    float currentOpacity = finalOpacity / 100.0f;
-
-                    //using var opacityEffect = new Opacity(dc);
-                    //opacityEffect.SetInput(0, colorOutput, true);
-                    opacityEffect.SetValue((int)OpacityProperties.Opacity, Math.Clamp(currentOpacity, 0.0f, 1.0f));
-                    using var opacityOutput = opacityEffect.Output;
-
-                    using var renderEffect = new Transform3D(dc);
-
-                    renderEffect.SetInput(0, opacityOutput, true);
-                    /*
-                    //---Gravity---
-                    float progressSquared = progress * progress;
-                    if (grTerminationToggle)
-                    {
-                        progressSquared = (progress * progress - progress);
-                    }
-
-                    float gravityOffsetX = current_gravityX * progressSquared;
-                    float gravityOffsetY = current_gravityY * progressSquared;
-                    float gravityOffsetZ = current_gravityZ * progressSquared;
-                    //---Gravity end---
-                    float currentx = currentx_base + gravityOffsetX;
-                    float currenty = currenty_base + gravityOffsetY;
-                    float currentz = currentz_base + gravityOffsetZ;
-                    //---Gravity and current---
-                    */
-                    //新ロジック
-                    Vector3 currentPosition = CalculatePosition(i, progress);
-
-                    float currentx = currentPosition.X;
-                    float currenty = currentPosition.Y;
-                    float currentz = currentPosition.Z;
-
-                    float currentScalex = finalScalex / 100.0f;
-                    float currentScaley = finalScaley / 100.0f;
-                    float currentScalez = finalScalez / 100.0f;
-
-                    float currentRotX_deg = finalRotX;
-                    float currentRotY_deg = finalRotY;
-                    float currentRotZ_deg = finalRotZ;
-
-                    float currentRotX_rad = (float)Math.PI * (currentRotX_deg - rotation.X) / 180;
-                    float currentRotY_rad = (float)Math.PI * (currentRotY_deg - rotation.Y) / 180;
-                    float currentRotZ_rad = (float)Math.PI * (currentRotZ_deg + rotation.Z) / 180;
-
-                    Matrix4x4 cam = effectDescription.DrawDescription.Camera;
-
-                    // カメラの前方ベクトル（ワールド空間での Z 軸方向）
-                    Vector3 camForward = new Vector3(cam.M31, cam.M32, cam.M33);
-                    if (camForward == Vector3.Zero) camForward = new Vector3(0, 0, 1);
-                    camForward = Vector3.Normalize(camForward);
-
-                    // カメラの Y 軸回転（Yaw）を取得（atan2(X, Z)）
-                    float cameraYaw = (float)Math.Atan2(camForward.X, camForward.Z); // ラジアン
-
-                    // --- 1. まず、手動回転をデフォルト値としてセット ---
-                    float finalPitch = currentRotX_rad; // デフォルトは手動(X)
-                    float finalYaw = currentRotY_rad;   // デフォルトは手動(Y)
-                    const float PI_HALF = (float)Math.PI / 2.0f;
-
-                    // --- 2. AutoOrientがONなら、進行方向の回転を計算 ---
-                    if (this.autoOrient)
-                    {
-                        float futureProgress = Math.Min(1.0f, progress + 0.01f);
-                        Vector3 futurePosition = CalculatePosition(i, futureProgress);
-
-                        Vector3 velocity = futurePosition - currentPosition;
-
-                        // 速度ゼロの場合の処理
-                        if (velocity.LengthSquared() < 0.0001f)
-                        {
-                            float pastProgress = Math.Max(0.0f, progress - 0.01f);
-                            Vector3 pastPosition = CalculatePosition(i, pastProgress);
-                            velocity = currentPosition - pastPosition;
-                        }
-
-                        // d. 速度がゼロでなければ、回転を計算
-                        if (velocity.LengthSquared() > 0.0001f)
-                        {
-                            Vector3 direction = Vector3.Normalize(velocity);
-
-                            //もし2DモードならZ軸回転のみ
-                            if (autoOrient2D)
+                            float T_end_wrapped = T_end_relative % loopDuration;
+                            float T_start_relative = T_base_start;
+                            if (timeInLoop >= T_start_relative)
                             {
-                                float targetAngleZ = (float)Math.Atan2(direction.Y, direction.X);
-                                finalYaw = 0f;
-                                finalPitch = 0f;
-                                currentRotZ_rad = targetAngleZ + PI_HALF;
+                                mainProgress = (timeInLoop - T_start_relative) / this.travelTime;
                             }
-                            // 3Dモードの場合
                             else
                             {
-
-                                float targetYaw = (float)Math.Atan2(direction.X, direction.Z);
-
-                                float targetPitch = (float)Math.Asin(-direction.Y) + PI_HALF;
-
-                                // YMM4のアイテム本体の回転を考慮
-                                float autoOrientYaw = targetYaw - ((float)Math.PI * rotation.Y / 180);
-
-                                // Y軸と同じように rotation.X を引く
-                                float autoOrientPitch = targetPitch - ((float)Math.PI * rotation.X / 180);
-
-                                // 計算結果を final に代入
-                                finalYaw = autoOrientYaw;
-                                finalPitch = autoOrientPitch;
+                                mainProgress = ((loopDuration - T_start_relative) + timeInLoop) / this.travelTime;
                             }
+                        }
+                    }
+                    else
+                    {
+                        // --- 単発モード (V4) ---
+                        float T_start = i * this.cycleTime;
+                        float startFrameOfItem = (float)i * delayFramesPerItem;
 
+                        if (baseVirtualFrame < startFrameOfItem) return;
+
+                        if (baseVirtualFrame >= T_start)
+                        {
+                            mainProgress = (baseVirtualFrame - T_start) / this.travelTime;
                         }
                     }
 
-                    Matrix4x4 finalRotationMatrix;
+                    if (float.IsNegativeInfinity(mainProgress)) return;
 
-                    if (this.billboardXYZ)
+                    // 最も古い残像が完全に消滅していれば描画しない
+                    float maxTrailLife = this.trailToggle ? (this.trailCount * this.trailInterval) : 0f;
+                    if (mainProgress < 0f || mainProgress > 1.0f + maxTrailLife) return;
+
+                    // --- 残像ループの開始 ---
+                    int loopCount = this.trailToggle ? Math.Max(1, this.trailCount) : 1;
+
+                    // 古い残像 → 本体 の順に描画
+                    for (int t = loopCount - 1; t >= 0; t--)
                     {
+                        float rawProgress = mainProgress - (t * this.trailInterval);
 
-                        // 2. ビュー行列の「逆行列」を計算 = カメラの「ワールド行列」
-                        Matrix4x4.Invert(cam, out var cameraWorldMatrix);
+                        // 0.0未満（生まれる前）または 1.0超過（死んだ後）なら描画しない
+                        if (rawProgress < 0.0f || rawProgress > 1.0f) continue;
 
-                        // 3. ワールド行列から「平行移動」成分を消去し、「回転」だけを残す
-                        cameraWorldMatrix.Translation = Vector3.Zero;
+                        // プールが足りなければ、その場で生成して追加する
+                        if (usedNodeCount >= trailEffectPool.Count)
+                        {
+                            trailEffectPool.Add(new ParticleEffectNodes(devices.DeviceContext));
+                        }
 
-                        // 4. 
-                        // finalRotationMatrix = cameraWorldMatrix; 
-                        // これで「オブジェクトのZ軸」が「カメラのZ軸」と完全に一致。
+                        var nodes = trailEffectPool[usedNodeCount];
+                        usedNodeCount++;
 
-                        //  その結果をカメラの向きに合わせる)
-                        finalRotationMatrix = cameraWorldMatrix * Matrix4x4.CreateRotationZ(currentRotZ_rad);
+                        // 手動でCurveを計算してparamProgressを作る。
+
+                        float paramProgress = rawProgress;
+                        if (this.curveToggle && this.curveFactorArray != null && this.curveFactorArray.Length > i)
+                        {
+                            float curveFactor = this.curveFactorArray[i];
+                            paramProgress = rawProgress * curveFactor;
+                        }
+                        // パラメータ計算用に 0-1 にクランプ
+                        float clampedProgress = Math.Min(1.0f, Math.Max(0.0f, paramProgress));
+
+                        // --- パラメータには clampedProgress を使う ---
+                        float RotationX_progress = clampedProgress;
+                        float RotationY_progress = clampedProgress;
+                        float RotationZ_progress = clampedProgress;
+                        float ScaleX_progress = clampedProgress;
+                        float ScaleY_progress = clampedProgress;
+                        float ScaleZ_progress = clampedProgress;
+                        float Opacity_progress = clampedProgress;
+
+                        // --- 固定軌道パラメータの取得 ---
+                        float current_startscalex = this.scaleStartx;
+                        if (this.fixedTrajectory && this.fixedScaleStartXArray != null && this.fixedScaleStartXArray.Length > i) current_startscalex = this.fixedScaleStartXArray[i];
+                        float current_startscaley = this.scaleStarty;
+                        if (this.fixedTrajectory && this.fixedScaleStartYArray != null && this.fixedScaleStartYArray.Length > i) current_startscaley = this.fixedScaleStartYArray[i];
+                        float current_startscalez = this.scaleStartz;
+                        if (this.fixedTrajectory && this.fixedScaleStartZArray != null && this.fixedScaleStartZArray.Length > i) current_startscalez = this.fixedScaleStartZArray[i];
+
+                        float current_scalex = this.scalex;
+                        if (this.fixedTrajectory && this.fixedScaleEndXArray != null && this.fixedScaleEndXArray.Length > i) current_scalex = this.fixedScaleEndXArray[i];
+                        float current_scaley = this.scaley;
+                        if (this.fixedTrajectory && this.fixedScaleEndYArray != null && this.fixedScaleEndYArray.Length > i) current_scaley = this.fixedScaleEndYArray[i];
+                        float current_scalez = this.scalez;
+                        if (this.fixedTrajectory && this.fixedScaleEndZArray != null && this.fixedScaleEndZArray.Length > i) current_scalez = this.fixedScaleEndZArray[i];
+
+                        float current_startRotationX = this.startRotationX;
+                        if (this.fixedTrajectory && this.fixedRotationStartXArray != null && this.fixedRotationStartXArray.Length > i) current_startRotationX = this.fixedRotationStartXArray[i];
+                        float current_startRotationY = this.startRotationY;
+                        if (this.fixedTrajectory && this.fixedRotationStartYArray != null && this.fixedRotationStartYArray.Length > i) current_startRotationY = this.fixedRotationStartYArray[i];
+                        float current_startRotationZ = this.startRotationZ;
+                        if (this.fixedTrajectory && this.fixedRotationStartZArray != null && this.fixedRotationStartZArray.Length > i) current_startRotationZ = this.fixedRotationStartZArray[i];
+
+                        float current_endRotationX = this.endRotationX;
+                        if (this.fixedTrajectory && this.fixedRotationEndXArray != null && this.fixedRotationEndXArray.Length > i) current_endRotationX = this.fixedRotationEndXArray[i];
+                        float current_endRotationY = this.endRotationY;
+                        if (this.fixedTrajectory && this.fixedRotationEndYArray != null && this.fixedRotationEndYArray.Length > i) current_endRotationY = this.fixedRotationEndYArray[i];
+                        float current_endRotationZ = this.endRotationZ;
+                        if (this.fixedTrajectory && this.fixedRotationEndZArray != null && this.fixedRotationEndZArray.Length > i) current_endRotationZ = this.fixedRotationEndZArray[i];
+
+                        float current_endopacity = this.endopacity;
+                        if (this.fixedTrajectory && this.fixedOpacityEndArray != null && this.fixedOpacityEndArray.Length > i) current_endopacity = this.fixedOpacityEndArray[i];
+                        float current_midopacity = this.opacityMapMidPoint;
+                        if (this.fixedTrajectory && this.fixedOpacityMidArray != null && this.fixedOpacityMidArray.Length > i) current_midopacity = this.fixedOpacityMidArray[i];
+                        float current_startopacity = this.startopacity;
+                        if (this.fixedTrajectory && this.fixedOpacityStartArray != null && this.fixedOpacityStartArray.Length > i) current_startopacity = this.fixedOpacityStartArray[i];
+
+                        int safeCount;
+                        int groupIndex;
+
+                        // Random Scale
+                        float finalScalex;
+                        if (this.randomScaleToggle && targetScaleXArray != null && startScaleXArray != null && targetScaleXArray.Length > 0 && startScaleXArray.Length > 0)
+                        {
+                            safeCount = Math.Max(1, this.randomScaleCount);
+                            groupIndex = i / safeCount;
+                            int targetIndex = Math.Min(groupIndex, targetScaleXArray.Length - 1);
+                            float startX_Random = startScaleXArray[targetIndex];
+                            float targetX = targetScaleXArray[targetIndex];
+                            // パラメータ用には paramProgress (Curve計算済み) を使う
+                            finalScalex = startX_Random + (targetX - startX_Random) * paramProgress;
+                        }
+                        else
+                        {
+                            finalScalex = current_startscalex + (current_scalex - current_startscalex) * ScaleX_progress;
+                        }
+
+                        float finalScaley;
+                        if (this.randomScaleToggle && targetScaleYArray != null && startScaleYArray != null && targetScaleYArray.Length > 0 && startScaleYArray.Length > 0)
+                        {
+                            safeCount = Math.Max(1, this.randomScaleCount);
+                            groupIndex = i / safeCount;
+                            int targetIndex = Math.Min(groupIndex, targetScaleYArray.Length - 1);
+                            float startY_Random = startScaleYArray[targetIndex];
+                            float targetY = targetScaleYArray[targetIndex];
+                            finalScaley = startY_Random + (targetY - startY_Random) * paramProgress;
+                        }
+                        else
+                        {
+                            finalScaley = current_startscaley + (current_scaley - current_startscaley) * ScaleY_progress;
+                        }
+
+                        float finalScalez;
+                        if (this.randomScaleToggle && targetScaleZArray != null && startScaleZArray != null && targetScaleZArray.Length > 0 && startScaleZArray.Length > 0)
+                        {
+                            safeCount = Math.Max(1, this.randomScaleCount);
+                            groupIndex = i / safeCount;
+                            int targetIndex = Math.Min(groupIndex, targetScaleZArray.Length - 1);
+                            float startZ_Random = startScaleZArray[targetIndex];
+                            float targetZ = targetScaleZArray[targetIndex];
+                            finalScalez = startZ_Random + (targetZ - startZ_Random) * paramProgress;
+                        }
+                        else
+                        {
+                            finalScalez = current_startscalez + (current_scalez - current_startscalez) * ScaleZ_progress;
+                        }
+
+                        // Random Rotation
+                        float finalRotX;
+                        if (this.randomRotXToggle && targetRotationXArray != null && startRotationXArray != null && targetRotationXArray.Length > 0 && startRotationXArray.Length > 0)
+                        {
+                            safeCount = Math.Max(1, this.randomRotXCount);
+                            groupIndex = i / safeCount;
+                            int targetIndex = Math.Min(groupIndex, targetRotationXArray.Length - 1);
+                            float startX_Random = startRotationXArray[targetIndex];
+                            float targetX = targetRotationXArray[targetIndex];
+                            finalRotX = startX_Random + (targetX - startX_Random) * paramProgress;
+                        }
+                        else
+                        {
+                            finalRotX = current_startRotationX + (current_endRotationX - current_startRotationX) * RotationX_progress;
+                        }
+
+                        float finalRotY;
+                        if (this.randomRotYToggle && targetRotationYArray != null && startRotationYArray != null && targetRotationYArray.Length > 0 && startRotationYArray.Length > 0)
+                        {
+                            safeCount = Math.Max(1, this.randomRotYCount);
+                            groupIndex = i / safeCount;
+                            int targetIndex = Math.Min(groupIndex, targetRotationYArray.Length - 1);
+                            float startY_Random = startRotationYArray[targetIndex];
+                            float targetY = targetRotationYArray[targetIndex];
+                            finalRotY = startY_Random + (targetY - startY_Random) * paramProgress;
+                        }
+                        else
+                        {
+                            finalRotY = current_startRotationY + (current_endRotationY - current_startRotationY) * RotationY_progress;
+                        }
+
+                        float finalRotZ;
+                        if (this.randomRotZToggle && targetRotationZArray != null && startRotationZArray != null && targetRotationZArray.Length > 0 && startRotationZArray.Length > 0)
+                        {
+                            safeCount = Math.Max(1, this.randomRotZCount);
+                            groupIndex = i / safeCount;
+                            int targetIndex = Math.Min(groupIndex, targetRotationZArray.Length - 1);
+                            float startZ_Random = startRotationZArray[targetIndex];
+                            float targetZ = targetRotationZArray[targetIndex];
+                            finalRotZ = startZ_Random + (targetZ - startZ_Random) * paramProgress;
+                        }
+                        else
+                        {
+                            finalRotZ = current_startRotationZ + (current_endRotationZ - current_startRotationZ) * RotationZ_progress;
+                        }
+
+                        // Opacity
+                        float finalOpacity;
+                        if (this.opacityMapToggle)
+                        {
+                            float op_start = current_startopacity;
+                            float op_mid = current_midopacity;
+                            float op_end = current_endopacity;
+                            float power = 1.0f + this.opacityMapEase * 4.0f;
+
+                            // Opacityマップ計算はclampedProgressを使用
+                            if (clampedProgress < 0.5f)
+                            {
+                                float p_half1 = clampedProgress * 2.0f;
+                                float t_ease = 1.0f - MathF.Pow(1.0f - p_half1, power);
+                                finalOpacity = op_start + (op_mid - op_start) * t_ease;
+                            }
+                            else
+                            {
+                                float p_half2 = (clampedProgress - 0.5f) * 2.0f;
+                                float t_ease = MathF.Pow(p_half2, power);
+                                finalOpacity = op_mid + (op_end - op_mid) * t_ease;
+                            }
+                        }
+                        else
+                        {
+                            float baseAnimatedOpacity = current_startopacity + (current_endopacity - current_startopacity) * Opacity_progress;
+                            if (this.randomOpacityToggle && targetOpacityArray != null && startOpacityArray != null && targetOpacityArray.Length > 0 && startOpacityArray.Length > 0 && this.count > i)
+                            {
+                                safeCount = Math.Max(1, this.randomOpacityCount);
+                                groupIndex = i / safeCount;
+                                int targetIndex = Math.Min(groupIndex, targetOpacityArray.Length - 1);
+                                float randomBaseOpacity = startOpacityArray[targetIndex];
+                                float opacityMultiplier = baseAnimatedOpacity / 100.0f;
+                                finalOpacity = randomBaseOpacity * opacityMultiplier;
+                            }
+                            else
+                            {
+                                finalOpacity = baseAnimatedOpacity;
+                            }
+                        }
+
+                        // 残像のフェード処理
+                        if (this.trailToggle && t > 0)
+                        {
+                            // 0.0(本体) ～ 1.0(最も古い残像) の進行度
+                            float t_rate = (float)t / this.trailCount;
+
+                            float fadeRate = 1.0f - ((float)t / this.trailCount) * this.trailFade;
+                            finalOpacity *= Math.Max(0f, fadeRate);
+
+                            // 残像の拡大縮小処理
+                            float scaleMult = 1.0f + ((this.trailScale / 100f) - 1.0f) * t_rate;
+
+                            // 負の値防止
+                            scaleMult = Math.Max(0f, scaleMult);
+
+                            finalScalex *= scaleMult;
+                            finalScaley *= scaleMult;
+                            finalScalez *= scaleMult;
+                        }
+
+
+                        // --- 座標計算には rawProgress (未加工) を渡す ---
+                        Vector3 currentPosition = CalculatePosition(i, rawProgress);
+
+                        float currentx = currentPosition.X;
+                        float currenty = currentPosition.Y;
+                        float currentz = currentPosition.Z;
+
+                        float currentScalex = finalScalex / 100.0f;
+                        float currentScaley = finalScaley / 100.0f;
+                        float currentScalez = finalScalez / 100.0f;
+
+                        float currentRotX_deg = finalRotX;
+                        float currentRotY_deg = finalRotY;
+                        float currentRotZ_deg = finalRotZ;
+
+                        float currentRotX_rad = (float)Math.PI * (currentRotX_deg - rotation.X) / 180;
+                        float currentRotY_rad = (float)Math.PI * (currentRotY_deg - rotation.Y) / 180;
+                        float currentRotZ_rad = (float)Math.PI * (currentRotZ_deg + rotation.Z) / 180;
+
+                        // Floor判定 (paramProgressを使用)
+                        groupIndex = i / Math.Max(1, this.forceRandomCount);
+                        float hitProgress = (this.floorToggle && this.hitProgressArray != null && groupIndex < this.hitProgressArray.Length)
+                                            ? this.hitProgressArray[groupIndex]
+                                            : float.MaxValue;
+
+                        if (paramProgress >= hitProgress)
+                        {
+                            float waitFrames = (this.floorWaitTime / 1000f) * this.fps;
+                            float fadeFrames = (this.floorFadeTime / 1000f) * this.fps;
+                            float framesSinceHit = (this.travelTime) * (paramProgress - hitProgress);
+                            float fadeStart_SinceHit = waitFrames;
+
+                            if (framesSinceHit >= fadeStart_SinceHit && fadeFrames > 0)
+                            {
+                                float fadeProgress = (framesSinceHit - fadeStart_SinceHit) / fadeFrames;
+                                fadeProgress = Math.Clamp(fadeProgress, 0.0f, 1.0f);
+                                finalOpacity = finalOpacity * (1.0f - fadeProgress);
+                            }
+                        }
+
+                        // 色 (clampedProgressを使用)
+                        byte currentA = (byte)(this.startColor.A + (this.endColor.A - this.startColor.A) * clampedProgress);
+                        byte currentR = (byte)(this.startColor.R + (this.endColor.R - this.startColor.R) * clampedProgress);
+                        byte currentG = (byte)(this.startColor.G + (this.endColor.G - this.startColor.G) * clampedProgress);
+                        byte currentB = (byte)(this.startColor.B + (this.endColor.B - this.startColor.B) * clampedProgress);
+
+                        var tint = new Vortice.Mathematics.Color4(
+                            currentR / 255.0f,
+                            currentG / 255.0f,
+                            currentB / 255.0f,
+                            currentA / 255.0f
+                        );
+
+                        nodes.colorEffect.SetInput(0, input, true);
+
+                        var tintMatrix = new Matrix5x4
+                        {
+                            M11 = tint.R,
+                            M12 = 0,
+                            M13 = 0,
+                            M14 = 0,
+                            M21 = 0,
+                            M22 = tint.G,
+                            M23 = 0,
+                            M24 = 0,
+                            M31 = 0,
+                            M32 = 0,
+                            M33 = tint.B,
+                            M34 = 0,
+                            M41 = 0,
+                            M42 = 0,
+                            M43 = 0,
+                            M44 = tint.A,
+                            M51 = 0,
+                            M52 = 0,
+                            M53 = 0,
+                            M54 = 0
+                        };
+                        nodes.colorEffect.Matrix = tintMatrix;
+
+                        using var colorOutput = nodes.colorEffect.Output;
+                        ID2D1Image colorStageOutput = colorOutput;
+
+                        safeCount = Math.Max(1, this.randomColorCount);
+                        groupIndex = i / safeCount;
+
+                        using var hueOutput = (randomColorToggle && groupIndex < this.hueEffects.Count)
+                                              ? this.hueEffects[groupIndex].Output
+                                              : null;
+
+                        if (hueOutput != null)
+                        {
+                            var hueEffect = this.hueEffects[groupIndex];
+                            hueEffect.SetInput(0, colorOutput, true);
+                            colorStageOutput = hueOutput;
+                        }
+
+                        // ブラー / ピント
+                        float blurAmount = 0f;
+                        float focusFadeFactor = 1.0f;
+
+                        if (this.focusToggle)
+                        {
+                            Vector4 clipPos = Vector4.Transform(currentPosition, this.camera);
+                            float particleDepth = (clipPos.W != 0) ? (clipPos.Z / clipPos.W) : 0f;
+                            float outOfFocus = Math.Abs(particleDepth - this.focusDepth);
+                            float blurFactor = 0.0f;
+                            if (outOfFocus > this.focusRange)
+                            {
+                                float distance = outOfFocus - this.focusRange;
+                                float normalizedDistance = Math.Clamp(distance / this.focusFallOffBlur, 0.0f, 1.0f);
+                                blurFactor = 1.0f - MathF.Exp(-normalizedDistance * normalizedDistance * 3.0f);
+                            }
+                            blurAmount = blurFactor * this.focusMaxBlur;
+
+                            if (this.focusFadeToggle)
+                            {
+                                float fadeRange = 1.0f - this.focusFadeMinOpacity;
+                                focusFadeFactor = 1.0f - (blurFactor * fadeRange);
+                            }
+                        }
+
+                        ID2D1Image blurStageOutput;
+
+                        if (blurAmount > 0.1f)
+                        {
+                            nodes.blurEffect.SetInput(0, colorStageOutput, true);
+                            nodes.blurEffect.StandardDeviation = blurAmount;
+                            blurStageOutput = nodes.blurEffect.Output;
+                        }
+                        else
+                        {
+                            blurStageOutput = colorStageOutput;
+                        }
+
+                        nodes.opacityEffect.SetInput(0, blurStageOutput, true);
+
+                        if (blurAmount > 0.1f && blurStageOutput is IDisposable d)
+                        {
+                            d.Dispose();
+                        }
+                        // 最終処理
+                        float currentOpacity = finalOpacity / 100.0f;
+                        currentOpacity *= focusFadeFactor;
+
+                        nodes.opacityEffect.SetValue((int)OpacityProperties.Opacity, Math.Clamp(currentOpacity, 0.0f, 1.0f));
+                        using var opacityOutput = nodes.opacityEffect.Output;
+
+                        nodes.renderEffect.SetInput(0, opacityOutput, true);
+
+                        // Matrix
+                        Matrix4x4 cam = effectDescription.DrawDescription.Camera;
+                        Vector3 camForward = new Vector3(cam.M31, cam.M32, cam.M33);
+                        if (camForward == Vector3.Zero) camForward = new Vector3(0, 0, 1);
+                        camForward = Vector3.Normalize(camForward);
+                        float cameraYaw = (float)Math.Atan2(camForward.X, camForward.Z);
+
+                        float finalPitch = currentRotX_rad;
+                        float finalYaw = currentRotY_rad;
+                        const float PI_HALF = (float)Math.PI / 2.0f;
+
+                        // 向きを同期機能
+                        if (this.autoOrient)
+                        {
+                            float futureProgress = Math.Min(1.0f, clampedProgress + 0.01f);
+                            Vector3 futurePosition = CalculatePosition(i, futureProgress); // ここはparamProgressを使うべきだが、微差なのでparamでもrawでもOK
+                            Vector3 velocity = futurePosition - currentPosition;
+                            if (velocity.LengthSquared() < 0.0001f)
+                            {
+                                float pastProgress = Math.Max(0.0f, clampedProgress - 0.01f);
+                                Vector3 pastPosition = CalculatePosition(i, pastProgress);
+                                velocity = currentPosition - pastPosition;
+                            }
+
+                            if (velocity.LengthSquared() > 0.0001f)
+                            {
+                                Vector3 direction = Vector3.Normalize(velocity);
+                                if (autoOrient2D)
+                                {
+                                    float targetAngleZ = (float)Math.Atan2(direction.Y, direction.X);
+                                    finalYaw = 0f;
+                                    finalPitch = 0f;
+                                    currentRotZ_rad = targetAngleZ + PI_HALF;
+                                }
+                                else
+                                {
+                                    float targetYaw = (float)Math.Atan2(direction.X, direction.Z);
+                                    float targetPitch = (float)Math.Asin(-direction.Y) + PI_HALF;
+                                    float autoOrientYaw = targetYaw - ((float)Math.PI * rotation.Y / 180);
+                                    float autoOrientPitch = targetPitch - ((float)Math.PI * rotation.X / 180);
+                                    finalYaw = autoOrientYaw;
+                                    finalPitch = autoOrientPitch;
+                                }
+                            }
+                        }
+                        //　ビルボード
+                        Matrix4x4 finalRotationMatrix;
+                        if (this.billboardXYZ)
+                        {
+                            Matrix4x4.Invert(cam, out var cameraWorldMatrix);
+                            cameraWorldMatrix.Translation = Vector3.Zero;
+                            finalRotationMatrix = cameraWorldMatrix * Matrix4x4.CreateRotationZ(currentRotZ_rad);
+                        }
+                        else if (this.billboard)
+                        {
+                            finalYaw = -cameraYaw;
+                            finalRotationMatrix = Matrix4x4.CreateRotationX(finalPitch) *
+                                                       Matrix4x4.CreateRotationY(finalYaw) *
+                                                       Matrix4x4.CreateRotationZ(currentRotZ_rad);
+                        }
+                        else
+                        {
+                            finalRotationMatrix = Matrix4x4.CreateRotationX(finalPitch) *
+                                                       Matrix4x4.CreateRotationY(finalYaw) *
+                                                       Matrix4x4.CreateRotationZ(currentRotZ_rad);
+                        }
+
+                        //最終的な描画
+                        Vector3 currentScale = new Vector3(currentScalex, currentScaley, currentScalez);
+
+                        nodes.renderEffect.TransformMatrix = finalRotationMatrix *
+                                                       Matrix4x4.CreateScale(currentScale) *
+                                                       Matrix4x4.CreateTranslation(new Vector3(currentx, currenty, currentz)) *
+                                                       effectDescription.DrawDescription.Camera *
+                                                       new Matrix4x4(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, -0.001f, 0f, 0f, 0f, 1f);
+
+                        using var renderOutput = nodes.renderEffect.Output;
+                        dc.DrawImage(renderOutput);
                     }
-                    /*
-                    else if (this.billboardXY)
-                    {
-                        Matrix4x4.Invert(cam, out var cameraWorldMatrix);
-                        cameraWorldMatrix.Translation = Vector3.Zero;
-                        finalRotationMatrix = cameraWorldMatrix * Matrix4x4.CreateRotationZ(currentRotZ_rad);
-                    }
-                    */
-                    //Y軸ビルボードがONの場合
-                    else if (this.billboard)
-                    {
-                        // Yaw(Y軸)だけカメラで上書き
-                        finalYaw = -cameraYaw;
-
-                        // 従来通り、X, Y, Z のオイラー角から行列を作成
-                        finalRotationMatrix = Matrix4x4.CreateRotationX(finalPitch) *
-                                                   Matrix4x4.CreateRotationY(finalYaw) *
-                                                   Matrix4x4.CreateRotationZ(currentRotZ_rad);
-                    }
-
-                    //ビルボードが両方OFFの場合
-                    else
-                    {
-                        // AutoOrient または 手動 で計算済みの finalPitch/finalYaw を使う
-                        finalRotationMatrix = Matrix4x4.CreateRotationX(finalPitch) *
-                                                   Matrix4x4.CreateRotationY(finalYaw) *
-                                                   Matrix4x4.CreateRotationZ(currentRotZ_rad);
-                    }
-
-
-                    Vector3 currentScale = new Vector3(currentScalex, currentScaley, currentScalez);
-
-
-
-
-                    renderEffect.TransformMatrix = finalRotationMatrix *
-                                                   Matrix4x4.CreateScale(currentScale) *
-                                                   Matrix4x4.CreateTranslation(new Vector3(currentx, currenty, currentz)) *
-                                                   effectDescription.DrawDescription.Camera *
-                                                   new Matrix4x4(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, -0.001f, 0f, 0f, 0f, 1f);
-
-                    using var renderOutput = renderEffect.Output;
-
-                    dc.DrawImage(renderOutput);
-
                 }
 
                 // 描画順序を決定する変数
 
                 this._drawList.Clear();
 
-                for (int i = 0; i < this.count; i++)
-                {
-                    bool isActive;
-                    // CalculateCurrentZ を呼び出し、現在の Z 座標とアクティブ状態を取得
-                    float currentz = CalculateCurrentZ(i, out isActive);
-
-                    if (isActive)
-                    {
-                        // 描画期間内のアイテムのみリストに追加
-                        // drawList の代わりに _drawList を使用
-                        this._drawList.Add(new ItemDrawData { Index = i, ZPosition = currentz });
-                    }
-                }
-
-                _drawList.Sort((a, b) => {
-                    // 1. ZPosition の比較 (主キー)
-                    int zComparison = a.ZPosition.CompareTo(b.ZPosition);
-
-                    if (zComparison != 0)
-                    {
-                        // Z座標が異なる場合、そのまま Z 座標で順序を決定
-                        return zComparison;
-                    }
-                    else
-                    {
-                        // Z座標が完全に同じ場合、元のインデックス (Index) を使用して順序を決定 (副キー)
-                        // インデックスが小さいものから描画することで、安定した順序を保証
-                        return a.Index.CompareTo(b.Index);
-                    }
-                });
-
-                // カメラ行列 (例: effectDescription.DrawDescription.Camera)
                 Matrix4x4 cam = effectDescription.DrawDescription.Camera;
 
-                // C#の多くのライブラリでは、これが第4行の (X, Y, Z) 成分に対応します
-                Vector3 camPosition = new Vector3(cam.M41, cam.M42, cam.M43);
-
-                Vector3 itemPosition = new Vector3(this.startx, this.starty, this.startz);
-                // アイテムからカメラへ向かうベクトル
-                Vector3 viewVector = camPosition - itemPosition;
-                viewVector = Vector3.Normalize(viewVector); // 正規化（長さ 1 にする）
-
-
-                Vector3 camForward = new Vector3(cam.M31, cam.M32, cam.M33);
-                camForward = Vector3.Normalize(camForward);
-
-                // カメラの向きが正面(+Z)に対してどれくらい回転しているか
-                float angleY = (float)Math.Atan2(camForward.X, camForward.Z);
-
-                if (!this.fixedDraw)
+                if (this.zSortToggle)
                 {
-                    // 180度以上回転していたら描画順を反転
-                    if (Math.Abs(angleY) > Math.PI / 2)
+                    // --- 1. 旧Zソート (ワールドZ軸) ---
+                    for (int i = 0; i < this.count; i++)
                     {
-                        _drawList.Reverse();
-                    }
+                        float progress = -1f; // -1 = 非描画
 
+                        if (this.loopToggle)
+                        {
+                            // --- ケース1: ループ (V5) の progress 計算 ---
+                            float T_base_start = i * this.cycleTime;
+                            float T_start_relative = T_base_start;
+                            float timeInLoop = timeToUse % loopDuration;
+                            float T_end_relative = T_base_start + this.travelTime;
+
+                            if (T_end_relative <= loopDuration)
+                            {
+                                if (timeInLoop >= T_base_start && timeInLoop < T_end_relative)
+                                {
+                                    progress = (timeInLoop - T_base_start) / this.travelTime;
+                                }
+                            }
+                            else
+                            {
+                                float T_end_wrapped = T_end_relative % loopDuration;
+                                if (timeInLoop >= T_start_relative)
+                                {
+                                    progress = (timeInLoop - T_start_relative) / this.travelTime;
+                                }
+                                else if (timeInLoop < T_end_wrapped)
+                                {
+                                    progress = ((loopDuration - T_start_relative) + timeInLoop) / this.travelTime;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // --- ケース2: 一回だけ (V4) の progress 計算 ---
+                            float T_start = i * this.cycleTime;
+                            float T_end = T_start + this.travelTime;
+                            if (timeToUse >= T_start && timeToUse < T_end)
+                            {
+                                progress = (timeToUse - T_start) / this.travelTime;
+                            }
+                        }
+
+                        if (progress < 0f || progress > 1.0f)
+                        {
+                            continue; // アクティブでない
+                        }
+
+                        // 2. 座標を計算してZソートキーに追加
+                        Vector3 currentPos = CalculatePosition(i, progress);
+                        this._drawList.Add(new ItemDrawData { Index = i, SortKey = currentPos.Z }); // SortKey = Z
+                    }
                 }
 
+                else
+                {
+                    for (int i = 0; i < this.count; i++)
+                    {
+                        float progress = -1f; // -1 = 非描画
+
+                        if (this.loopToggle)
+                        {
+                            // --- ケース1: ループ (V5) の progress 計算 ---
+                            float T_base_start = i * this.cycleTime;
+                            float T_start_relative = T_base_start;
+                            float timeInLoop = timeToUse % loopDuration; // timeToUseは(5)で計算済み
+                            float T_end_relative = T_base_start + this.travelTime;
+
+                            if (T_end_relative <= loopDuration)
+                            {
+                                if (timeInLoop >= T_base_start && timeInLoop < T_end_relative)
+                                {
+                                    progress = (timeInLoop - T_base_start) / this.travelTime;
+                                }
+                            }
+                            else
+                            {
+                                float T_end_wrapped = T_end_relative % loopDuration;
+                                if (timeInLoop >= T_start_relative)
+                                {
+                                    progress = (timeInLoop - T_start_relative) / this.travelTime;
+                                }
+                                else if (timeInLoop < T_end_wrapped)
+                                {
+                                    progress = ((loopDuration - T_start_relative) + timeInLoop) / this.travelTime;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // --- ケース2: 一回だけ (V4) の progress 計算 ---
+                            float T_start = i * this.cycleTime;
+                            float T_end = T_start + this.travelTime;
+                            if (timeToUse >= T_start && timeToUse < T_end)
+                            {
+                                progress = (timeToUse - T_start) / this.travelTime;
+                            }
+                        }
+
+                        if (progress < 0f || progress > 1.0f)
+                        {
+                            continue; // アクティブでない
+                        }
+
+                        // 2. 座標を計算
+                        Vector3 currentPos = CalculatePosition(i, progress);
+                        Vector4 clipPos = Vector4.Transform(currentPos, cam);
+                        float perspectiveZ = (clipPos.W != 0) ? (clipPos.Z / clipPos.W) : 0f;
+                        this._drawList.Add(new ItemDrawData { Index = i, SortKey = perspectiveZ });
+                    }
+
+                    if (!this.fixedDraw)
+                    {
+                        _drawList.Sort((a, b) =>
+                        {
+                            // 'SortKey' は 0.0 (手前) ～ 1.0 (奥) の値
+                            int distanceComparison = a.SortKey.CompareTo(b.SortKey);
+
+                            if (distanceComparison != 0)
+                            {
+                                return distanceComparison;
+                            }
+                            else
+                            {
+                                return a.Index.CompareTo(b.Index);
+                            }
+                        });
+                    }
+                }
 
                 if (this.reverseDraw >= 0.5f) // または this.reverseDraw == true など
                 {
@@ -1876,7 +2079,30 @@ namespace Particles3D
                 foreach (var data in _drawList)
                 {
                     // data.Index は、元のアイテムのインデックス i に相当します
-                    draw(data.Index);
+                    draw(data.Index, timeToUse);
+                }
+
+                // ---邪魔なメモリ清掃---
+                int threshold = (int)(usedNodeCount * 1.5) + 100;
+
+                if (trailEffectPool.Count > threshold)
+                {
+                    // 余裕を持たせたラインより後ろを削除対象にする
+                    int keepCount = usedNodeCount + 50;
+                    if (keepCount < trailEffectPool.Count)
+                    {
+                        int removeCount = trailEffectPool.Count - keepCount;
+
+                        // 1. 削除する分のDirect2Dリソースを解放
+                        for (int k = 0; k < removeCount; k++)
+                        {
+                            // リストの後ろから順にアクセス
+                            trailEffectPool[keepCount + k].Dispose();
+                        }
+
+                        // 2. リストから削除
+                        trailEffectPool.RemoveRange(keepCount, removeCount);
+                    }
                 }
 
                 dc.EndDraw();
@@ -1885,9 +2111,6 @@ namespace Particles3D
 
                 isFirst = false;
                 IsInputChanged = false;
-
-
-
             }
 
 
@@ -1902,101 +2125,21 @@ namespace Particles3D
         public struct ItemDrawData
         {
             public int Index;
-            public float ZPosition; // ソートキー
+            public float SortKey; // ソートキー
         }
 
-        // 特定のアイテムの現在のZ座標を計算する関数
-        private float CalculateCurrentZ(int i, out bool isActive)
-        {
-            isActive = false;
-
-            // 1. 進行度 (progress) の計算(T_start, T_end, 期間外チェックを移植 ）
-            float T_start = i * this.cycleTime;
-            float T_end = T_start + this.travelTime;
-
-            if (this.frame < T_start || this.frame > T_end)
-            {
-                return 0f; // 描画範囲外なので 0f (または float.MaxValue) を返す
-            }
-            isActive = true;
-
-            float progress = (this.frame - T_start) / this.travelTime;
-
-            if (this.curveToggle && this.curveFactorArray != null && this.curveFactorArray.Length > i)
-            {
-                float curveFactor = this.curveFactorArray[i];
-
-                //progress をランダムな係数で調整
-                progress = progress * curveFactor;
-
-            }
-
-            float current_startz = this.startz;
-            if (this.fixedTrajectory && this.fixedPositionStartZArray != null && this.fixedPositionStartZArray.Length > i)
-                current_startz = this.fixedPositionStartZArray[i];
-
-            float current_endz = this.endz;
-            if (this.fixedTrajectory && this.fixedPositionEndZArray != null && this.fixedPositionEndZArray.Length > i)
-            {
-                current_endz = this.fixedPositionEndZArray[i];
-            }
-
-            progress = Math.Min(1.0f, Math.Max(0.0f, progress)); // 念のため 0.0～1.0 にクランプ
-
-            float PositionZ_progress = progress; // 例: X座標の進行度に適用
-
-            // 2. Z座標関連の計算
-            float currentz_base = 0f;
-            if (this.randomToggleZ && targetZArray != null && startZArray != null && targetZArray.Length > 0 && startZArray.Length > 0)
-            {
-                int safeRandomZCount = Math.Max(1, this.randomZCount);
-                int groupIndexZ = i / safeRandomZCount;
-
-                // 配列の安全なインデックスを取得
-                int targetIndex = Math.Min(groupIndexZ, targetZArray.Length - 1);
-
-                // ランダムな始点と終点を取得
-                float startZ_Random = startZArray[targetIndex];
-                float targetZ = targetZArray[targetIndex];
-
-                // 進行度 progress を使用して、ランダムな始点から終点へ線形補間
-                // (イージングを適用したい場合は、ここで progress にイージング関数を適用)
-                currentz_base = startZ_Random + (targetZ - startZ_Random) * progress;
-            }
-            else
-            {
-                // ランダム無効時（以前のロジック）
-                currentz_base = current_startz + (current_endz - current_startz) * PositionZ_progress;
-            }
-
-            float current_gravityZ = this.gravityZ;
-            if (this.fixedTrajectory && this.fixedGravityZArray != null && this.fixedGravityZArray.Length > i)
-            {
-                // fixedTrajectory の場合、配列の値で上書きする
-                current_gravityZ = this.fixedGravityZArray[i];
-            }
-
-            // 3. 重力オフセットの計算
-            float progressSquared = progress * progress;
-            if (grTerminationToggle)
-            {
-                progressSquared = (progress * progress - progress);
-            }
-
-            float gravityOffsetZ = current_gravityZ * progressSquared;
-
-            // 4. 最終Z座標の決定
-            return currentz_base + gravityOffsetZ;
-        }
-
-        // 指定した個体(i)の、指定した進行度(progress)における3D座標を計算する
         private Vector3 CalculatePosition(int i, float progress)
         {
-            // progress が 0.0-1.0 の範囲を超えても計算できるように、
-            // draw(i) の最初にある T_start, T_end, frame のチェックは「しない」
+            float current_gravityX = this.gravityX;
+            if (this.fixedTrajectory && this.fixedGravityXArray != null && this.fixedGravityXArray.Length > i)
+                current_gravityX = this.fixedGravityXArray[i];
+            float current_gravityY = this.gravityY;
+            if (this.fixedTrajectory && this.fixedGravityYArray != null && this.fixedGravityYArray.Length > i)
+                current_gravityY = this.fixedGravityYArray[i];
+            float current_gravityZ = this.gravityZ;
+            if (this.fixedTrajectory && this.fixedGravityZArray != null && this.fixedGravityZArray.Length > i)
+                current_gravityZ = this.fixedGravityZArray[i];
 
-            // --- 射出系統 ---
-            // progress のカーブ補正 (draw(i) からコピペ)
             if (this.curveToggle && this.curveFactorArray != null && this.curveFactorArray.Length > i)
             {
                 float curveFactor = this.curveFactorArray[i];
@@ -2005,6 +2148,157 @@ namespace Particles3D
 
             // progress を 0.0-1.0 にクランプ
             progress = Math.Min(1.0f, Math.Max(0.0f, progress));
+
+            // 「床にくっつく(Glue)」処理
+            int groupIndex = i / Math.Max(1, this.forceRandomCount);
+            float hitProgress = (this.floorToggle && this.hitProgressArray != null && groupIndex < this.hitProgressArray.Length)
+                                ? this.hitProgressArray[groupIndex]
+                                : float.MaxValue;
+
+            if (progress < hitProgress)
+            {
+                // --- 1. 衝突していない（飛行中）---
+                return CalculatePosition_Internal(i, progress);
+            }
+            else
+            {
+                // --- 2. 衝突時刻 (hitProgress) 以降 ---
+
+                // 衝突した「瞬間」の座標と、その後の「経過時間(秒)」を計算
+                Vector3 P0 = CalculatePosition_Internal(i, hitProgress); // 衝突地点
+                P0.Y = this.floorY; // 床にスナップ
+                float t_sec = (this.fps > 0) ? ((progress - hitProgress) * (this.travelTime / this.fps)) : 0f;
+
+                switch (this.floorActionType)
+                {
+                    case 0: // --- Glue (接着) ---
+                        {
+                            // 衝突地点から動かない
+                            return P0;
+                        }
+
+                    case 1: // --- Ice (滑走) ---
+                        {
+                            // 衝突時の速度(V0)を取得
+                            Vector3 V0 = (this.hitVelocityArray != null && groupIndex < this.hitVelocityArray.Length)
+                                        ? this.hitVelocityArray[groupIndex]
+                                        : Vector3.Zero;
+
+                            V0.Y = 0; // Y(垂直)の速度をゼロにする
+
+                            //摩擦のロジックを追加
+                            float friction = Math.Abs(this.bounceEnergyLoss - 1.0f);
+                            V0 *= friction;
+                            // 加速度 A はゼロ (重力なし)
+                            return P0 + (V0 * t_sec); // (P = P0 + V0*t)
+                        }
+
+                    case 2: // --- Bounce (反射) ---
+                        {
+                            // 1. 最初の衝突状態を取得
+                            Vector3 P_current = P0; // P0 = 衝突地点
+                            Vector3 V_current = (this.hitVelocityArray != null && groupIndex < this.hitVelocityArray.Length)
+                                                ? this.hitVelocityArray[groupIndex]
+                                                : Vector3.Zero;
+
+                            // 2. UIからパラメータ取得
+                            float bFactor = this.bounceFactor;
+                            float eLossMultiplier = 1.0f - this.bounceEnergyLoss;
+
+                            // 床判定タイプによって反射方向を決める
+                            float bounceDir = (this.floorJudgementType == 1) ? 1.0f : -1.0f;
+
+                            // 3. 「最初の」バウンドと損失を適用
+                            // 強制的に指定した方向(bounceDir)へ速度を向けます
+                            V_current.Y = bounceDir * Math.Abs(V_current.Y) * bFactor;
+                            V_current *= eLossMultiplier; // 全体に損失
+
+                            // 4. 水平方向の重力 (X, Z) を取得
+                            Vector3 A_XZ = new Vector3(current_gravityX, 0, current_gravityZ);
+
+                            // 5. バウンドループのための擬似的な重力 (g) を定義
+                            float g_pseudo = this.bounceGravity;
+
+                            float t_remaining = t_sec; // 衝突からの総経過時間
+
+                            // 6. 解析的バウンドループ
+                            int safetyCounter = 0;
+                            while (t_remaining > 0.0001f)
+                            {
+                                safetyCounter++;
+                                if (safetyCounter > this.bounceCount)
+                                {
+                                    // 無限ループ防止
+                                    return P_current;
+                                }
+
+                                // 7. 停止条件のチェック
+                                // 床上(Dir=-1)なら V > -1.0 で停止、床下(Dir=1)なら V < 1.0 で停止とみなす
+                                if ((bounceDir < 0 && V_current.Y > -1.0f) || (bounceDir > 0 && V_current.Y < 1.0f))
+                                {
+                                    V_current.Y = 0;
+                                    float t_sq = t_remaining * t_remaining;
+                                    return P_current + (V_current * t_remaining) + (0.5f * A_XZ * t_sq);
+                                }
+
+                                // 8. この1回のバウンド（放物線）にかかる時間を計算
+                                float t_arc_duration = -2.0f * V_current.Y / g_pseudo;
+
+                                // 戻ってこない場合（天井反射で重力が下向き等）の対策
+                                // 時間が負、または極小の場合は「もう戻ってこない」としてそのまま移動させて終了
+                                if (t_arc_duration <= 0.0001f)
+                                {
+                                    float t_sq = t_remaining * t_remaining;
+                                    // 垂直重力も含めて移動
+                                    Vector3 A_fall = new Vector3(A_XZ.X, g_pseudo, A_XZ.Z);
+                                    return P_current + (V_current * t_remaining) + (0.5f * A_fall * t_sq);
+                                }
+
+                                // 9. 「残りの時間」は、この「バウンド時間」の中か？
+                                if (t_remaining <= t_arc_duration)
+                                {
+                                    // YES: これが最後の軌道。
+                                    float t_sq = t_remaining * t_remaining;
+                                    Vector3 A_arc = new Vector3(A_XZ.X, g_pseudo, A_XZ.Z);
+                                    return P_current + (V_current * t_remaining) + (0.5f * A_arc * t_sq);
+                                }
+
+                                // NO: このバウンドを「完了」し、まだ時間が余っている。
+
+                                // 10. 「完了した」バウンド時間分、t_remaining を減らす
+                                t_remaining -= t_arc_duration;
+
+                                // 11. このバウンドが完了した時点の「座標」を計算 (次のP0)
+                                float t_arc_sq = t_arc_duration * t_arc_duration;
+                                Vector3 A_arc_full = new Vector3(A_XZ.X, g_pseudo, A_XZ.Z);
+                                Vector3 P_end_arc = P_current + (V_current * t_arc_duration) + (0.5f * A_arc_full * t_arc_sq);
+                                P_end_arc.Y = this.floorY; // 床にスナップ
+
+                                // 12. このバウンドが完了した時点の「速度」を計算 (次のV0)
+                                Vector3 V_end_arc = V_current + (A_arc_full * t_arc_duration);
+
+                                // 13. 次のループのための状態を更新
+                                P_current = P_end_arc;
+                                V_current = V_end_arc;
+
+                                // 14. 次のバウンドの「反発」と「エネルギー損失」を適用
+                                V_current.Y = bounceDir * Math.Abs(V_current.Y) * bFactor;
+                                V_current *= eLossMultiplier;
+                            }
+
+                            return P_current;
+                        }
+
+                    default: // 不明なタイプならGlueと同じ
+                        return P0;
+                }
+            }
+        }
+
+        // 指定した個体(i)の、指定した進行度(progress)における3D座標を計算する
+        private Vector3 CalculatePosition_Internal(int i, float progress)
+        {
+            progress = ApplyAirResistance(progress, this.airResistance);
 
             float PositionX_progress = progress;
             float PositionY_progress = progress;
@@ -2041,128 +2335,158 @@ namespace Particles3D
                 current_gravityZ = this.fixedGravityZArray[i];
 
             //---random関連--- (draw(i) からコピペ)
-            float currentx_base = 0f;
-            float currenty_base = 0f;
-            float currentz_base = 0f;
-            // X座標の計算
-            if (this.randomToggleX && targetXArray != null && startXArray != null && targetXArray.Length > 0 && startXArray.Length > 0)
+            if (this.calculationType == 1)
             {
-                int safeRandomXCount = Math.Max(1, this.randomXCount);
-                int groupIndexX = i / safeRandomXCount;
-                int targetIndex = Math.Min(groupIndexX, targetXArray.Length - 1);
-                float startX_Random = startXArray[targetIndex];
-                float targetX = targetXArray[targetIndex];
-                currentx_base = startX_Random + (targetX - startX_Random) * progress;
+                // 1. 経過時間
+                float t_sec = (this.fps > 0) ? (progress * (this.travelTime / this.fps)) : 0f;
+                float t_squared = t_sec * t_sec;
+
+                // 2. 初期位置
+                Vector3 P0 = new Vector3(current_startx, current_starty, current_startz);
+
+                // 3. 加速度ベクトル
+                Vector3 A = new Vector3(current_gravityX, current_gravityY, current_gravityZ);
+
+                // 4. 現在の物理パラメータを取得 (ランダム/固定を考慮)
+                int groupIndex = i / Math.Max(1, this.forceRandomCount);
+
+                float currentPitch = this.forcePitch;
+                float currentYaw = this.forceYaw;
+                float currentRoll = this.forceRoll;
+                float currentVelocity = this.forceVelocity;
+
+                // (RandomForceToggle が ON で、配列が存在し、インデックスが有効なら)
+                if (this.forceRandomCount > 0 && this.randomForcePitchArray != null && groupIndex < this.randomForcePitchArray.Length && this.randomForceYawArray != null && this.randomForceRollArray != null && this.randomForceVelocityArray != null)
+                {
+                    // 事前計算したランダム値（固定軌道も反映済み）を使用
+                    currentPitch = this.randomForcePitchArray[groupIndex];
+                    currentYaw = this.randomForceYawArray[groupIndex];
+                    currentRoll = this.randomForceRollArray[groupIndex];
+                    currentVelocity = this.randomForceVelocityArray[groupIndex];
+                }
+                // (ランダムがOFFで、固定軌道がONなら)
+                else if (this.fixedTrajectory && this.fixedForcePitchArray != null && i < this.fixedForcePitchArray.Length && this.fixedForceYawArray != null && this.fixedForceRollArray != null && this.fixedForceVelocityArray != null)
+                {
+                    // 固定軌道の値を使用
+                    currentPitch = this.fixedForcePitchArray[i];
+                    currentYaw = this.fixedForceYawArray[i];
+                    currentRoll = this.fixedForceRollArray[i];
+                    currentVelocity = this.fixedForceVelocityArray[i];
+                }
+
+                float pitchRad = MathF.PI * currentPitch / 180f;
+                float yawRad = MathF.PI * currentYaw / 180f;
+                float rollRad = MathF.PI * currentRoll / 180f;
+
+                // 4. 角度をクォータニオンに変換
+                Quaternion qYawPitch = Quaternion.CreateFromYawPitchRoll(yawRad, pitchRad, 0f);
+                Quaternion qRollWorld = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, rollRad);
+                Quaternion finalRot = Quaternion.Normalize(Quaternion.Multiply(qRollWorld, qYawPitch));
+
+                // 最終的な方向
+                Vector3 direction = Vector3.Transform(Vector3.UnitZ, finalRot);
+                Vector3 V0 = direction * currentVelocity;
+
+                // 7. 最終座標
+                Vector3 finalPosition = P0 + (V0 * t_sec) + (0.5f * A * t_squared);
+
+                return finalPosition;
             }
             else
             {
-                currentx_base = current_startx + (current_endx - current_startx) * PositionX_progress;
-            }
+                float currentx_base = 0f;
+                float currenty_base = 0f;
+                float currentz_base = 0f;
+                // X座標の計算
+                if (this.randomToggleX && targetXArray != null && startXArray != null && targetXArray.Length > 0 && startXArray.Length > 0)
+                {
+                    int safeRandomXCount = Math.Max(1, this.randomXCount);
+                    int groupIndexX = i / safeRandomXCount;
+                    int targetIndex = Math.Min(groupIndexX, targetXArray.Length - 1);
+                    float startX_Random = startXArray[targetIndex];
+                    float targetX = targetXArray[targetIndex];
+                    currentx_base = startX_Random + (targetX - startX_Random) * progress;
+                }
+                else
+                {
+                    currentx_base = current_startx + (current_endx - current_startx) * PositionX_progress;
+                }
 
-            // Y座標の計算
-            if (this.randomToggleY && targetYArray != null && startYArray != null && targetYArray.Length > 0 && startYArray.Length > 0)
-            {
-                int safeRandomYCount = Math.Max(1, this.randomYCount);
-                int groupIndexY = i / safeRandomYCount;
-                int targetIndex = Math.Min(groupIndexY, targetYArray.Length - 1);
-                float startY_Random = startYArray[targetIndex];
-                float targetY = targetYArray[targetIndex];
-                currenty_base = startY_Random + (targetY - startY_Random) * progress;
-            }
-            else
-            {
-                currenty_base = current_starty + (current_endy - current_starty) * PositionY_progress;
-            }
+                // Y座標の計算
+                if (this.randomToggleY && targetYArray != null && startYArray != null && targetYArray.Length > 0 && startYArray.Length > 0)
+                {
+                    int safeRandomYCount = Math.Max(1, this.randomYCount);
+                    int groupIndexY = i / safeRandomYCount;
+                    int targetIndex = Math.Min(groupIndexY, targetYArray.Length - 1);
+                    float startY_Random = startYArray[targetIndex];
+                    float targetY = targetYArray[targetIndex];
+                    currenty_base = startY_Random + (targetY - startY_Random) * progress;
+                }
+                else
+                {
+                    currenty_base = current_starty + (current_endy - current_starty) * PositionY_progress;
+                }
 
-            // Z座標の計算
-            if (this.randomToggleZ && targetZArray != null && startZArray != null && targetZArray.Length > 0 && startZArray.Length > 0)
-            {
-                int safeRandomZCount = Math.Max(1, this.randomZCount);
-                int groupIndexZ = i / safeRandomZCount;
-                int targetIndex = Math.Min(groupIndexZ, targetZArray.Length - 1);
-                float startZ_Random = startZArray[targetIndex];
-                float targetZ = targetZArray[targetIndex];
-                currentz_base = startZ_Random + (targetZ - startZ_Random) * progress;
+                // Z座標の計算
+                if (this.randomToggleZ && targetZArray != null && startZArray != null && targetZArray.Length > 0 && startZArray.Length > 0)
+                {
+                    int safeRandomZCount = Math.Max(1, this.randomZCount);
+                    int groupIndexZ = i / safeRandomZCount;
+                    int targetIndex = Math.Min(groupIndexZ, targetZArray.Length - 1);
+                    float startZ_Random = startZArray[targetIndex];
+                    float targetZ = targetZArray[targetIndex];
+                    currentz_base = startZ_Random + (targetZ - startZ_Random) * progress;
+                }
+                else
+                {
+                    currentz_base = current_startz + (current_endz - current_startz) * PositionZ_progress;
+                }
+
+                //---Gravity--- (draw(i) からコピペ)
+                float progressSquared = progress * progress;
+                if (grTerminationToggle)
+                {
+                    progressSquared = (progress * progress - progress);
+                }
+
+                float gravityOffsetX = current_gravityX * progressSquared;
+                float gravityOffsetY = current_gravityY * progressSquared;
+                float gravityOffsetZ = current_gravityZ * progressSquared;
+                //---Gravity end---
+
+                float currentx = currentx_base + gravityOffsetX;
+                float currenty = currenty_base + gravityOffsetY;
+                float currentz = currentz_base + gravityOffsetZ;
+                //---Gravity and current---
+
+                return new Vector3(currentx, currenty, currentz);
             }
-            else
-            {
-                currentz_base = current_startz + (current_endz - current_startz) * PositionZ_progress;
-            }
+            // 測定終了
 
-            //---Gravity--- (draw(i) からコピペ)
-            float progressSquared = progress * progress;
-            if (grTerminationToggle)
-            {
-                progressSquared = (progress * progress - progress);
-            }
+        }
 
-            float gravityOffsetX = current_gravityX * progressSquared;
-            float gravityOffsetY = current_gravityY * progressSquared;
-            float gravityOffsetZ = current_gravityZ * progressSquared;
-            //---Gravity end---
+        private float ApplyAirResistance(float progress, float resistance)
+        {
+            if (resistance <= 0.001f) return progress; // 抵抗なし(線形)
+            if (progress >= 0.999f) return 1.0f;     // ほぼゴール
 
-            float currentx = currentx_base + gravityOffsetX;
-            float currenty = currenty_base + gravityOffsetY;
-            float currentz = currentz_base + gravityOffsetZ;
-            //---Gravity and current---
+            // MathF.Pow の指数 1.0 (線形) -> 5.0 (強いカーブ) にマッピング
+            float power = 1.0f + resistance * 4.0f;
 
-            return new Vector3(currentx, currenty, currentz);
+            // EaseOut (Power)
+            return 1.0f - MathF.Pow(1.0f - progress, power);
         }
 
         public struct HslColor
         {
             public double H, S, L;
         }
-
-        public static HslColor RgbToHsl(System.Windows.Media.Color rgb)
+        void EnsureArraySize<T>(ref T[]? array, int length)
         {
-            double r = rgb.R / 255.0;
-            double g = rgb.G / 255.0;
-            double b = rgb.B / 255.0;
-
-            double max = Math.Max(r, Math.Max(g, b));
-            double min = Math.Min(r, Math.Min(g, b));
-            double delta = max - min;
-
-            double h = 0, s = 0, l = (max + min) / 2.0;
-
-            if (delta != 0)
+            if (array == null || array.Length != length)
             {
-                s = (l < 0.5) ? (delta / (max + min)) : (delta / (2.0 - max - min));
-                if (max == r) h = (g - b) / delta;
-                else if (max == g) h = 2.0 + (b - r) / delta;
-                else h = 4.0 + (r - g) / delta;
-                h *= 60;
-                if (h < 0) h += 360;
+                array = new T[length];
             }
-            return new HslColor { H = h, S = s, L = l };
-        }
-
-        public static System.Windows.Media.Color HslToRgb(HslColor hsl)
-        {
-            double r = hsl.L, g = hsl.L, b = hsl.L;
-            if (hsl.S != 0)
-            {
-                double q = (hsl.L < 0.5) ? (hsl.L * (1.0 + hsl.S)) : (hsl.L + hsl.S - (hsl.L * hsl.S));
-                double p = (2.0 * hsl.L) - q;
-                double hk = hsl.H / 360.0;
-                double[] t = { hk + (1.0 / 3.0), hk, hk - (1.0 / 3.0) };
-                for (int i = 0; i < 3; i++)
-                {
-                    if (t[i] < 0) t[i] += 1.0;
-                    if (t[i] > 1) t[i] -= 1.0;
-                    if (t[i] < (1.0 / 6.0)) t[i] = p + ((q - p) * 6.0 * t[i]);
-                    else if (t[i] < 0.5) t[i] = q;
-                    else if (t[i] < (2.0 / 3.0)) t[i] = p + ((q - p) * 6.0 * (2.0 / 3.0 - t[i]));
-                    else t[i] = p;
-                }
-                r = t[0]; g = t[1]; b = t[2];
-            }
-            return System.Windows.Media.Color.FromRgb(
-                (byte)Math.Round(r * 255.0),
-                (byte)Math.Round(g * 255.0),
-                (byte)Math.Round(b * 255.0)
-            );
         }
         public void ClearInput()
         {
@@ -2170,23 +2494,30 @@ namespace Particles3D
 
         public void Dispose()
         {
+
             // 1. disposerによる解放処理（内部リソースをクリーンアップ）
             disposer.Dispose();
 
-            // 2. ★追加: CommandListを明示的に解放 (disposerで解放されていなければここで解放)
+            // 2. 追加: CommandListを明示的に解放 (disposerで解放されていなければここで解放)
             if (commandList != null && commandList is IDisposable disposableCommandList)
             {
                 disposableCommandList.Dispose();
             }
             this.commandList = null;
 
-            this.input = null; // 参照を切る
-
             foreach (var effect in this.hueEffects)
             {
                 effect.Dispose();
             }
             this.hueEffects.Clear();
+
+            foreach (var nodeSet in this.trailEffectPool)
+            {
+                nodeSet.Dispose();
+            }
+            this.trailEffectPool.Clear();
+
+            this.input = null; // 参照を切る
 
         }
 

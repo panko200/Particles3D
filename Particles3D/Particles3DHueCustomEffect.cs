@@ -11,10 +11,9 @@ namespace Particles3D
 {
     internal class Particles3DHueCustomEffect : D2D1CustomShaderEffectBase
     {
-        // Factor のみ残します
         public float Factor { set => SetValue((int)EffectImpl.Properties.Factor, value); }
 
-        // ★ HSLの単一シフト値を設定する新しいメソッドとプロパティ
+        // HSLの単一シフト値を設定する新しいメソッドとプロパティ
         // HLSLの cbuffer に直接対応するフィールドに値を設定します
         public float HueShift { set => SetValue((int)EffectImpl.Properties.HueShift, value); }
         public float SaturationFactor { set => SetValue((int)EffectImpl.Properties.SaturationFactor, value); }
@@ -28,7 +27,7 @@ namespace Particles3D
         [StructLayout(LayoutKind.Sequential)]
         struct ConstantBuffer
         {
-            // ★ HLSLの新しい cbuffer に完全に一致させる必要があります
+            // HLSLの新しい cbuffer に完全に一致させる
             public float HueShift;
             public float SaturationFactor;
             public float LuminanceFactor;
@@ -76,7 +75,6 @@ namespace Particles3D
             public float SaturationFactor { get => constants.SaturationFactor; set { constants.SaturationFactor = value; UpdateConstants(); } }
             [CustomEffectProperty(PropertyType.Float, (int)Properties.LuminanceFactor)]
             public float LuminanceFactor { get => constants.LuminanceFactor; set { constants.LuminanceFactor = value; UpdateConstants(); } }
-            // Factor は残します
             [CustomEffectProperty(PropertyType.Float, (int)Properties.Factor)]
             public float Factor { get => constants.Factor; set { constants.Factor = value; UpdateConstants(); } }
 
