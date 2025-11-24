@@ -1,5 +1,4 @@
-﻿using Particles3D;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
@@ -18,7 +17,7 @@ using YukkuriMovieMaker.Plugin.Effects;
 
 namespace Particles3D
 {
-    [VideoEffect("パーティクル3D", ["アニメーション"], ["3Dparticles", "particles", "worldparticles", "パーティカル"])]
+    [VideoEffect("パーティクル3D", ["アニメーション"], ["3Dparticles", "particles", "パーティクル", "particles3D"])]
     internal class Particles3DEffect : VideoEffectBase
     {
 
@@ -403,10 +402,6 @@ namespace Particles3D
         [ToggleSlider]
         public bool RandomOpacityToggle { get => randomOpacityToggle; set => Set(ref randomOpacityToggle, value); }
         bool randomOpacityToggle = false;
-        [Display(GroupName = "ランダム", Name = "不透明度初期と終端同期", Description = "不透明度の初期値と不透明度の終端値を同期します。初期範囲を動かすことによって終端値もそれにつられます。")]
-        [ToggleSlider]
-        public bool RandomSEOpacityToggle { get => randomSEOpacityToggle; set => Set(ref randomSEOpacityToggle, value); }
-        bool randomSEOpacityToggle = false;
         [Display(GroupName = "ランダム", Name = "周期不透明度", Description = "周期不透明度")]
         [AnimationSlider("F0", "周期", 1, 10)]
         public Animation RandomOpacityCount { get; } = new Animation(1, 1, 100);
@@ -435,7 +430,7 @@ namespace Particles3D
         public bool FixedTrajectory { get => fixedTrajectory; set => Set(ref fixedTrajectory, value); }
         bool fixedTrajectory = false;
 
-        [Display(GroupName = "パーティクル", Name = "パーティクルをループ", Description = "ONにすると、その画像アイテムの最初から最後までずっとループします。")]
+        [Display(GroupName = "パーティクル", Name = "パーティクルをループ", Description = "ONにすると、その画像アイテムの最初から最後までずっとループします。アニメーションスライダーのイージングには対応していません。")]
         [ToggleSlider]
         public bool LoopToggle { get => loopToggle; set => Set(ref loopToggle, value); }
         bool loopToggle = false;
@@ -537,6 +532,16 @@ namespace Particles3D
         public Animation TrailScale { get; } = new Animation(100, 0, YMM4Constants.VeryLargeValue);
 
 
+        [Display(GroupName = "軽量化", Name = "画面外を描画しない", Description = "画面に映っていないパーティクルの描画処理をスキップします。")]
+        [ToggleSlider]
+        public bool CullingToggle { get => cullingToggle; set => Set(ref cullingToggle, value); }
+        bool cullingToggle = false;
+
+        [Display(GroupName = "軽量化", Name = "判定バッファ", Description = "画面外判定の余裕を持たせる範囲です。値を大きくすると画面外遠くまで描画されるようになります（パーティクルが急に消えるのを防ぐために調整してください）。")]
+        [AnimationSlider("F1", "", 0, 2)]
+        public Animation CullingBuffer { get; } = new Animation(0.2f, 0, 10);
+
+
 
         public override IEnumerable<string> CreateExoVideoFilters(int keyFrameIndex, ExoOutputDescription exoOutputDescription)
         {
@@ -556,7 +561,7 @@ namespace Particles3D
             RandomOpacityCount,RandomStartOpacityRange,RandomEndOpacityRange,ScaleStartX,ScaleStartY,ScaleStartZ,RandomHueRange,RandomSatRange, RandomLumRange,RandomColorCount,
             ForcePitch, ForceYaw, ForceVelocity,ForceRoll, ForceRandomCount, ForceRandomPitch, ForceRandomYaw, ForceRandomVelocity, ForceRandomRoll, FloorY, FloorWaitTime, FloorFadeTime,
             FocusDepth, FocusRange, FocusMaxBlur, FocusFadeMinOpacity, FocusFallOffBlur, AirResistance, BounceFactor, BounceEnergyLoss, BounceGravity, OpacityMapMidPoint, OpacityMapEase, BounceCount,
-            TrailCount, TrailInterval, TrailFade, TrailScale
+            TrailCount, TrailInterval, TrailFade, TrailScale, CullingBuffer
             ];
 
         public enum MovementCalculationType
@@ -735,7 +740,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = true; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 50f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -888,7 +892,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = true; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 50f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -1041,7 +1044,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -1193,7 +1195,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = true; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = true; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 40f); // ランダム：終端不透明度
@@ -1345,7 +1346,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = true; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = true; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 40f); // ランダム：終端不透明度
@@ -1497,7 +1497,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -1649,7 +1648,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 360f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = true; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -1801,7 +1799,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -1953,7 +1950,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -2105,7 +2101,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 360f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -2257,7 +2252,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -2411,7 +2405,6 @@ namespace Particles3D
                     ApplyPresetValue(RandomEndRotZRange, 0f); // ランダム：終端Z回転
 
                     RandomOpacityToggle = false; // ランダム：不透明度ランダム有効化
-                    RandomSEOpacityToggle = false; // ランダム：不透明度初期と終端同期
                     ApplyPresetValue(RandomOpacityCount, 1); // ランダム：周期不透明度
                     ApplyPresetValue(RandomStartOpacityRange, 0f); // ランダム：初期不透明度
                     ApplyPresetValue(RandomEndOpacityRange, 100f); // ランダム：終端不透明度
@@ -2449,6 +2442,9 @@ namespace Particles3D
                     ApplyPresetValue(TrailInterval, 0.005f); // 残像 : 残像の間隔
                     ApplyPresetValue(TrailFade, 0.5f); // 残像 : 残像の減衰率
                     ApplyPresetValue(TrailScale, 100f); // 残像 : 残像の拡大率
+
+                    CullingToggle = false; // 軽量化：画面外を描画しない
+                    ApplyPresetValue(CullingBuffer, 0.2f); // 軽量化：判定バッファ
                     break;
             }
         }

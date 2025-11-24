@@ -1,18 +1,22 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Numerics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
-using Particles3D;
 using Vortice.Direct2D1;
 using Vortice.Direct2D1.Effects;
 using Vortice.Mathematics;
 using Windows.Graphics.Display;
 using Windows.Networking.NetworkOperators;
 using YukkuriMovieMaker.Commons;
+using YukkuriMovieMaker.Controls;
 using YukkuriMovieMaker.Player.Video;
+using YukkuriMovieMaker.Plugin.Shape;
+using YukkuriMovieMaker.Settings;
 
 //--Todo--
 //初期と終端を同期するようにしたい。ただし、初期を動かすことで終端もつられて動く。しかし、終端は固定されることはない。(済)
@@ -39,6 +43,8 @@ using YukkuriMovieMaker.Player.Video;
 //プリセット機能の追加(済)
 //残像エフェクト(済)
 //残像段々小さくする機能(済)
+//カメラに表示されていないものは描画しない機能(軽量化)(済)
+
 namespace Particles3D
 {
 
@@ -142,8 +148,6 @@ namespace Particles3D
         float[]? hitProgressArray;
         Vector3[]? hitVelocityArray;
 
-
-
         // 事前計算したHLSLエフェクトを保存するリスト
         List<Particles3DHueCustomEffect> hueEffects = new();
 
@@ -182,7 +186,7 @@ namespace Particles3D
         float randomStartRotYRange, randomEndRotYRange; // 回転ランダム幅
         float randomStartRotZRange, randomEndRotZRange; // 回転ランダム幅
         float randomStartOpacityRange, randomEndOpacityRange; // 透明度ランダム幅
-        bool randomSEScaleToggle, randomSERotXToggle, randomSERotYToggle, randomSERotZToggle, randomSEOpacityToggle; // Start/End連動トグル
+        bool randomSEScaleToggle, randomSERotXToggle, randomSERotYToggle, randomSERotZToggle;
         bool billboard, billboardXYZ;
         //bool billboardXY;
         bool grTerminationToggle;
@@ -213,6 +217,12 @@ namespace Particles3D
         float trailInterval, trailFade, trailScale;
         int trailCount;
         bool trailToggle;
+        bool cullingToggle;
+        float cullingBuffer;
+        float projectWidth = 1920;
+        float projectHeight = 1080;
+        float imageWidth = 100f;
+        float imageHeight = 100f;
 
         System.Windows.Media.Color startColor;
         System.Windows.Media.Color endColor;
@@ -313,7 +323,6 @@ namespace Particles3D
             var randomOpacityCount = (int)item.RandomOpacityCount.GetValue(frame, length, fps);
             var randomStartOpacityRange = (float)item.RandomStartOpacityRange.GetValue(frame, length, fps);
             var randomEndOpacityRange = (float)item.RandomEndOpacityRange.GetValue(frame, length, fps);
-            var randomSEOpacityToggle = item.RandomSEOpacityToggle;
 
             var randomSyScaleToggle = item.RandomSyScaleToggle;
             var randomSeed = (int)item.RandomSeed.GetValue(frame, length, fps);
@@ -399,6 +408,8 @@ namespace Particles3D
             var trailFade = (float)item.TrailFade.GetValue(frame, length, fps);
             var trailScale = (float)item.TrailScale.GetValue(frame, length, fps);
 
+            var cullingToggle = item.CullingToggle;
+            var cullingBuffer = (float)item.CullingBuffer.GetValue(frame, length, fps);
 
             //---random関連---
             // randomXCountが0だと0除算や計算がおかしくなるので、1以上に強制する
@@ -410,6 +421,26 @@ namespace Particles3D
             // 配列に必要なサイズは、[グループ0の目標]...[グループN-1の目標] + [全体の最終目標] の N+1 個
             int arraySize = numberOfGroups + 1;
 
+            // プロジェクト情報の更新
+            if (isFirst)
+            {
+                UpdateProjectInfo();
+            }
+
+            if ((isFirst || IsInputChanged) && this.input != null)
+            {
+                // 画像のバウンディングボックス（範囲）を取得
+                var imageSize = this.devices.DeviceContext.GetImageLocalBounds(this.input);
+
+                // 幅と高さを計算して保存
+                this.imageWidth = imageSize.Right - imageSize.Left;
+                this.imageHeight = imageSize.Bottom - imageSize.Top;
+
+                // 念のため0以下ならデフォルトに戻す
+                if (this.imageWidth <= 0) this.imageWidth = 100f;
+                if (this.imageHeight <= 0) this.imageHeight = 100f;
+            }
+
             // arrayNeedsUpdate のチェックは、this.に代入する前に行う
             bool arrayNeedsUpdate = isFirst || this.randomSeed != randomSeed ||
                 this.randomXCount != randomXCount || this.randomStartXRange != randomStartXRange || this.randomEndXRange != randomEndXRange || this.endx != endx || this.randomSEToggleX != randomSEToggleX ||
@@ -417,14 +448,14 @@ namespace Particles3D
                 this.randomZCount != randomZCount || this.randomStartZRange != randomStartZRange || this.randomEndZRange != randomEndZRange || this.endz != endz || this.randomSEToggleZ != randomSEToggleZ ||
                 this.curveRange != curveRange || this.curveToggle != curveToggle || this.fixedTrajectory != fixedTrajectory ||
                 this.gravityX != gravityX || this.gravityY != gravityY || this.gravityZ != gravityZ || this.grTerminationToggle != grTerminationToggle ||
-                this.endopacity != endopacity ||
+                this.endopacity != endopacity || this.startopacity != startopacity || this.startRotationX != startRotationX || this.startRotationY != startRotationY || this.startRotationZ != startRotationZ ||
                 this.endRotationX != endRotationX || this.endRotationY != endRotationY || this.endRotationZ != endRotationZ ||
                 this.scalex != scalex || this.scaley != scaley || this.scalez != scalez || this.randomSyScaleToggle != randomSyScaleToggle ||
                 this.randomScaleCount != randomScaleCount || this.randomStartScaleRange != randomStartScaleRange || this.randomEndScaleRange != randomEndScaleRange || this.randomSEScaleToggle != randomSEScaleToggle ||
                 this.randomRotXCount != randomRotXCount || this.randomStartRotXRange != randomStartRotXRange || this.randomEndRotXRange != randomEndRotXRange || this.randomSERotXToggle != randomSERotXToggle ||
                 this.randomRotYCount != randomRotYCount || this.randomStartRotYRange != randomStartRotYRange || this.randomEndRotYRange != randomEndRotYRange || this.randomSERotYToggle != randomSERotYToggle ||
                 this.randomRotZCount != randomRotZCount || this.randomStartRotZRange != randomStartRotZRange || this.randomEndRotZRange != randomEndRotZRange || this.randomSERotZToggle != randomSERotZToggle ||
-                this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange || this.randomSEOpacityToggle != randomSEOpacityToggle ||
+                this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange ||
                 this.billboard != billboard || /*this.billboardXY != billboardXY ||*/ this.billboardXYZ != billboardXYZ || this.startx != startx || this.starty != starty || this.startz != startz ||
                 this.scaleStartz != scaleStartz || this.scaleStartx != scaleStartx || this.scaleStarty != scaleStarty ||
                 this.pSEToggleX != pSEToggleX || this.pSEToggleY != pSEToggleY || this.pSEToggleZ != pSEToggleZ || this.autoOrient != autoOrient || this.autoOrient2D != autoOrient2D ||
@@ -452,7 +483,7 @@ namespace Particles3D
                 this.randomRotXToggle != randomRotXToggle || this.randomRotXCount != randomRotXCount || this.randomStartRotXRange != randomStartRotXRange || this.randomEndRotXRange != randomEndRotXRange || this.randomSERotXToggle != randomSERotXToggle ||
                 this.randomRotYToggle != randomRotYToggle || this.randomRotYCount != randomRotYCount || this.randomStartRotYRange != randomStartRotYRange || this.randomEndRotYRange != randomEndRotYRange || this.randomSERotYToggle != randomSERotYToggle ||
                 this.randomRotZToggle != randomRotZToggle || this.randomRotZCount != randomRotZCount || this.randomStartRotZRange != randomStartRotZRange || this.randomEndRotZRange != randomEndRotZRange || this.randomSERotZToggle != randomSERotZToggle ||
-                this.randomOpacityToggle != randomOpacityToggle || this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange || this.randomSEOpacityToggle != randomSEOpacityToggle ||
+                this.randomOpacityToggle != randomOpacityToggle || this.randomOpacityCount != randomOpacityCount || this.randomStartOpacityRange != randomStartOpacityRange || this.randomEndOpacityRange != randomEndOpacityRange ||
                 this.billboard != billboard || /*this.billboardXY != billboardXY ||*/ this.billboardXYZ != billboardXYZ || this.randomSyScaleToggle != randomSyScaleToggle ||
                 this.pSEToggleX != pSEToggleX || this.pSEToggleY != pSEToggleY || this.pSEToggleZ != pSEToggleZ || this.grTerminationToggle != grTerminationToggle ||
                 this.startColor != startColor || this.endColor != endColor || this.scaleStartx != scaleStartx || this.scaleStarty != scaleStarty || this.scaleStartz != scaleStartz ||
@@ -463,7 +494,8 @@ namespace Particles3D
                 this.zSortToggle != zSortToggle || this.focusToggle != focusToggle || this.focusFadeToggle != focusFadeToggle || this.focusDepth != focusDepth || this.focusRange != focusRange || this.focusMaxBlur != focusMaxBlur || this.focusFadeMinOpacity != focusFadeMinOpacity ||
                 this.focusFallOffBlur != focusFallOffBlur || this.airResistance != airResistance || this.bounceFactor != bounceFactor || this.bounceEnergyLoss != bounceEnergyLoss || this.bounceGravity != bounceGravity ||
                 this.loopToggle != loopToggle || this.opacityMapMidPoint != opacityMapMidPoint || this.opacityMapToggle != opacityMapToggle || this.opacityMapEase != opacityMapEase || this.bounceCount != bounceCount ||
-                this.trailToggle != trailToggle || this.trailCount != trailCount || this.trailInterval != trailInterval || this.trailFade != trailFade || this.trailScale != trailScale
+                this.trailToggle != trailToggle || this.trailCount != trailCount || this.trailInterval != trailInterval || this.trailFade != trailFade || this.trailScale != trailScale ||
+                this.cullingToggle != cullingToggle || this.cullingBuffer != cullingBuffer
                 /* || this.easingType != item.EasingType || this.easingMode != item.EasingMode */)
             {
                 //this.に記憶
@@ -540,7 +572,6 @@ namespace Particles3D
                 this.randomOpacityCount = randomOpacityCount;
                 this.randomStartOpacityRange = randomStartOpacityRange;
                 this.randomEndOpacityRange = randomEndOpacityRange;
-                this.randomSEOpacityToggle = randomSEOpacityToggle;
                 this.billboardXYZ = billboardXYZ;
                 //this.billboardXY = billboardXY;
                 this.billboard = billboard;
@@ -599,6 +630,8 @@ namespace Particles3D
                 this.trailInterval = trailInterval;
                 this.trailFade = trailFade;
                 this.trailScale = trailScale;
+                this.cullingToggle = cullingToggle;
+                this.cullingBuffer = cullingBuffer;
 
                 if (pSEToggleX)
                 {
@@ -1992,6 +2025,25 @@ namespace Particles3D
 
                         // 2. 座標を計算してZソートキーに追加
                         Vector3 currentPos = CalculatePosition(i, progress);
+
+                        if (this.cullingToggle)
+                        {
+                            // 画面外ならリストに追加せずスキップ
+                            float maxScale = Math.Max(this.scalex, Math.Max(this.scaley, this.scalez));
+
+                            // ランダムスケール有効なら、ランダム範囲の最大値も考慮
+                            if (this.randomScaleToggle)
+                            {
+                                maxScale += Math.Max(this.randomStartScaleRange, this.randomEndScaleRange);
+                            }
+
+                            // 修正したIsVisibleを呼び出し
+                            if (!IsVisible(currentPos, cam, this.cullingBuffer, maxScale))
+                            {
+                                continue;
+                            }
+                        }
+
                         this._drawList.Add(new ItemDrawData { Index = i, SortKey = currentPos.Z }); // SortKey = Z
                     }
                 }
@@ -2048,6 +2100,25 @@ namespace Particles3D
 
                         // 2. 座標を計算
                         Vector3 currentPos = CalculatePosition(i, progress);
+
+                        if (this.cullingToggle)
+                        {
+                            // 画面外ならリストに追加せずスキップ
+                            float maxScale = Math.Max(this.scalex, Math.Max(this.scaley, this.scalez));
+
+                            // ランダムスケール有効なら、ランダム範囲の最大値も考慮
+                            if (this.randomScaleToggle)
+                            {
+                                maxScale += Math.Max(this.randomStartScaleRange, this.randomEndScaleRange);
+                            }
+
+                            // 修正したIsVisibleを呼び出し
+                            if (!IsVisible(currentPos, cam, this.cullingBuffer, maxScale))
+                            {
+                                continue;
+                            }
+                        }
+
                         Vector4 clipPos = Vector4.Transform(currentPos, cam);
                         float perspectiveZ = (clipPos.W != 0) ? (clipPos.Z / clipPos.W) : 0f;
                         this._drawList.Add(new ItemDrawData { Index = i, SortKey = perspectiveZ });
@@ -2206,6 +2277,8 @@ namespace Particles3D
                             float eLossMultiplier = 1.0f - this.bounceEnergyLoss;
 
                             // 床判定タイプによって反射方向を決める
+                            // 0 (床上): 上に跳ねる (-1.0)
+                            // 1 (床下): 下に跳ねる (+1.0)
                             float bounceDir = (this.floorJudgementType == 1) ? 1.0f : -1.0f;
 
                             // 3. 「最初の」バウンドと損失を適用
@@ -2488,6 +2561,128 @@ namespace Particles3D
                 array = new T[length];
             }
         }
+        private bool IsVisible(Vector3 worldPos, Matrix4x4 cameraMatrix, float buffer, float particleScale)
+        {
+            // 1. カメラ行列を使って「カメラから見た相対座標」に変換
+            Vector4 clipPos = Vector4.Transform(worldPos, cameraMatrix);
+
+            float w = clipPos.W;
+
+            // 2. パーティクルの大きさを計算
+            float baseSize = Math.Max(this.imageWidth, this.imageHeight);
+            float radius = (baseSize / 2.0f) * (particleScale / 100.0f);
+
+            // 3. 【手前/奥の判定】 
+            // 中心(w)がマイナスでも、半径(radius)分だけ粘らせる
+            // バッファ(buffer)も少し加味する
+            float nearClipLimit = -(radius * 1.5f); // 少し余裕を持たせる(*1.5)
+
+            if (w < nearClipLimit)
+            {
+                return false; // 完全にカメラの後ろに行った
+            }
+
+            float baseWidth = this.projectWidth;
+            float baseHeight = this.projectHeight;
+            float baseWidthHalf = baseWidth / 2f;
+            float baseHeightHalf = baseHeight / 2f;
+
+            // カメラからの距離（奥行き）を取得
+            float depth = Math.Abs(clipPos.Z);
+
+            // 3. その深度における「画面の端」の座標を計算
+            float allowedHalfWidth = baseWidthHalf + (depth * baseWidthHalf / 1000f);
+
+            // Y軸（高さ）はアスペクト比(16:9)に合わせて計算
+            float allowedHalfHeight = baseHeightHalf + (depth * (baseHeightHalf / 1000f));
+
+            // 4. バッファ（余裕）を適用
+            // bufferが0.5なら、さらに1.5倍外側まで許容
+            float marginScale = 1.0f + buffer;
+            float limitX = allowedHalfWidth * marginScale;
+            float limitY = allowedHalfHeight * marginScale;
+
+            // 5. 判定
+            // 変換後の座標(viewPos)が、計算した許容範囲(limit)に収まっているか
+            if (Math.Abs(clipPos.X) > limitX) return false;
+            if (Math.Abs(clipPos.Y) > limitY) return false;
+
+            return true;
+        }
+
+        static Window? GetYmmMainWindow()
+        {
+            // Application.Current が null の場合やウィンドウがない場合を考慮
+            if (Application.Current == null) return null;
+
+            foreach (Window w in Application.Current.Windows)
+            {
+                if (w.GetType().FullName == "YukkuriMovieMaker.Views.MainView")
+                {
+                    return w;
+                }
+            }
+            return null;
+        }
+
+        // リフレクションでプロパティの値を取得する
+        static dynamic? GetProp(dynamic obj, string propName)
+        {
+            if (obj == null) return null;
+            Type type = obj.GetType();
+            PropertyInfo? info = type.GetProperty(propName);
+            return info?.GetValue(obj);
+        }
+
+        // 解像度情報の更新処理
+        private void UpdateProjectInfo()
+        {
+            // Application.Current が null なら何もしない
+            if (Application.Current == null) return;
+
+            try
+            {
+                // UIスレッド上で実行するように依頼する
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    var window = GetYmmMainWindow();
+                    if (window == null) return;
+
+                    // ViewModel階層を掘っていく
+                    dynamic? mainVM = window.DataContext;
+                    dynamic? statusBarVM = GetProp(mainVM, "StatusBarViewModel");
+                    dynamic? statusBarVal = GetProp(statusBarVM, "Value");
+                    dynamic? videoInfoProp = GetProp(statusBarVal, "VideoInfo");
+
+                    // VideoInfo.Value を取得
+                    string? videoInfoString = GetProp(videoInfoProp, "Value");
+
+                    // 文字列解析: "1920x1080 60fps 48000Hz"
+                    if (!string.IsNullOrEmpty(videoInfoString))
+                    {
+                        var parts = videoInfoString.Split(' ');
+                        if (parts.Length > 0)
+                        {
+                            var resParts = parts[0].Split('x');
+                            if (resParts.Length >= 2)
+                            {
+                                if (float.TryParse(resParts[0], out float w) && float.TryParse(resParts[1], out float h))
+                                {
+                                    this.projectWidth = w;
+                                    this.projectHeight = h;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                // エラーが出ても止まらないようにする
+                Debug.WriteLine("Project Info Fetch Error: " + ex.Message);
+            }
+        }
+
         public void ClearInput()
         {
         }
@@ -2526,6 +2721,5 @@ namespace Particles3D
             this.input = input;
             IsInputChanged = true;
         }
-
     }
 }
