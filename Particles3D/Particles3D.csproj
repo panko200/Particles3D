@@ -40,6 +40,9 @@
     <Reference Include="Vortice.Mathematics">
       <HintPath>$(YMM4DirPath)Vortice.Mathematics.dll</HintPath>
     </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(YMM4DirPath)Newtonsoft.Json.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 
